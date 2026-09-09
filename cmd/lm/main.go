@@ -11,7 +11,7 @@ import (
 
 const (
 	programName    = "lm"
-	programVersion = "0.1.0"
+	programVersion = "0.2.0"
 )
 
 // errSilent is returned when the error has already been printed.
@@ -42,7 +42,7 @@ func printRootHelp() {
 	fmt.Printf("%s\n", color.Whi9("MODELS"))
 	fmt.Printf("  %-30s %s\n", "search [query|count]", "Search MLX model registry; numeric arg sets result count")
 	fmt.Printf("  %-30s %s\n", "get <model>", "Download a model from the registry")
-	fmt.Printf("  %-30s %s\n", "ls|list", "List locally available models")
+	fmt.Printf("  %-30s %s\n", "ls|list", "List models in the local Hugging Face cache")
 	fmt.Printf("  %-30s %s\n", "show <model>", "Show details for a model")
 	fmt.Printf("  %-30s %s\n\n", "rm <model>", "Remove a model")
 	fmt.Printf("%s\n", color.Whi9("BENCHMARKING"))

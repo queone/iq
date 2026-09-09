@@ -78,7 +78,7 @@ The `cmd/iq` package is the CLI entry point — it wires commands (cobra), flags
 
 ### Model Management
 
-The **`lm`** binary handles the full model lifecycle (extracted from `iq` in Phase 1). Models are downloaded from [mlx-community](https://huggingface.co/models?filter=mlx) via the `hf` CLI and stored in the standard HuggingFace cache at `~/.cache/huggingface/hub/`. A manifest at `~/.config/iq/models.json` tracks what IQ knows about.
+The **`lm`** binary handles the full model lifecycle (extracted from `iq` in Phase 1). Models are downloaded from [mlx-community](https://huggingface.co/models?filter=mlx) via the `hf` CLI and stored in the standard HuggingFace cache at `~/.cache/huggingface/hub/`. A manifest at `~/.config/iq/models.json` caches per-model metadata (pull date, task tag); `lm list` and `lm show` reconcile it against the cache, so it mirrors what is on disk.
 
 Key operations: `search`, `get`, `list`, `show`, `rm`.
 
@@ -86,13 +86,13 @@ Key operations: `search`, `get`, `list`, `show`, `rm`.
 
 `lm get` checks the model's task type before downloading; if it is not `text-generation`, a yellow warning is printed (download proceeds anyway). After download, the `pipeline_tag` is cached in the manifest for offline display. Infers a suggested size (`small` for < 2GB, `large` otherwise) and prints the `iq pool add` command to assign it.
 
-`lm list` displays TASK alongside DISK / PULLED / PARAMS / EST MEM / TIER. On first display, missing task tags are backfilled from the HF API in parallel (with local `config.json` inference as fallback) and persisted to the manifest.
+`lm list` first reconciles the manifest with the HF cache: every cached model missing from the manifest is registered (cache directory mtime as PULLED; the task tag is then backfilled like any other untagged entry, HF API first with local `config.json` fallback), every manifest entry whose cache directory is gone is dropped, and a gray note reports each change. It then displays TASK alongside DISK / PULLED / PARAMS / EST MEM / TIER. On first display, missing task tags are backfilled from the HF API in parallel (with local `config.json` inference as fallback) and persisted to the manifest.
 
-`lm show` displays the TASK field (backfilled from HF API or local `config.json` inference if not cached).
+`lm show` runs the same reconcile, so any cached model can be shown; a model in neither the manifest nor the cache is an error. It displays the TASK field (backfilled from HF API or local `config.json` inference if not cached).
 
 **Local task inference** (`inferTaskFromConfig`) — when the HF API returns no `pipeline_tag`, IQ reads the model's local `config.json` and infers the task: vision indicator keys (`vision_config`, `visual`, `vision_tower`, `image_size`) or known VLM `model_type` values → `image-text-to-text`; known text-generation `model_type` values (only after confirming no vision indicators) → `text-generation`.
 
-`lm rm` auto-removes the model from the pool and stops running sidecars (including the embed sidecar) with yellow warnings before prompting for confirmation. The confirmation prompt is printed in yellow with `[y/N]` in default color.
+`lm rm` removes any cached model whether or not the manifest lists it, and fails with an error when the model is in neither the manifest nor the cache. It auto-removes the model from the pool and stops running sidecars (including the embed sidecar) with yellow warnings before prompting for confirmation. The confirmation prompt is printed in yellow with `[y/N]` in default color.
 
 ### Configuration
 

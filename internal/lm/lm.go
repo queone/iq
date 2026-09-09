@@ -21,7 +21,8 @@ import (
 	"iq/internal/config"
 )
 
-const hfAPIBase = "https://huggingface.co/api/models"
+// HFAPIBase is the Hugging Face model API root. Tests may point it at a local server.
+var HFAPIBase = "https://huggingface.co/api/models"
 
 // ── HuggingFace API types ────────────────────────────────────────────────────
 
@@ -69,7 +70,7 @@ func (m HFModel) TotalSize() int64 {
 
 // HFSearch queries the HuggingFace API for MLX models.
 func HFSearch(ctx context.Context, query string, limit int) ([]HFModel, error) {
-	u, _ := url.Parse(hfAPIBase)
+	u, _ := url.Parse(HFAPIBase)
 	q := u.Query()
 	q.Set("search", query)
 	q.Set("filter", "mlx")
@@ -104,7 +105,7 @@ func HFSearch(ctx context.Context, query string, limit int) ([]HFModel, error) {
 // HFFetchModel retrieves full model details (including sibling sizes) from the
 // HF individual model endpoint: GET /api/models/{id}
 func HFFetchModel(ctx context.Context, id string) (HFModel, error) {
-	rawURL := hfAPIBase + "/" + id
+	rawURL := HFAPIBase + "/" + id
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -219,13 +220,10 @@ func AddToManifest(id string) error {
 			return SaveManifest(entries)
 		}
 	}
-	hfName := "models--" + strings.ReplaceAll(id, "/", "--")
-	home, _ := os.UserHomeDir()
-	hfCache := filepath.Join(home, ".cache", "huggingface", "hub", hfName)
 	entries = append(entries, ManifestEntry{
 		ID:       id,
 		PulledAt: time.Now().UTC().Format(time.RFC3339),
-		HFCache:  hfCache,
+		HFCache:  HFCacheDir(id),
 	})
 	return SaveManifest(entries)
 }
@@ -243,20 +241,61 @@ func RegisterInManifest(id string) error {
 			return nil // already registered
 		}
 	}
-	hfName := "models--" + strings.ReplaceAll(id, "/", "--")
-	home, _ := os.UserHomeDir()
-	hfCache := filepath.Join(home, ".cache", "huggingface", "hub", hfName)
-	// Use the mtime of the cache dir as a proxy for when the model was pulled.
+	entries = append(entries, entryFromCache(id))
+	return SaveManifest(entries)
+}
+
+// entryFromCache builds a manifest entry for a model already in the HF cache.
+// The cache directory's mtime stands in for the pull date when it exists.
+func entryFromCache(id string) ManifestEntry {
+	hfCache := HFCacheDir(id)
 	pulledAt := time.Now().UTC().Format(time.RFC3339)
 	if info, err := os.Stat(hfCache); err == nil {
 		pulledAt = info.ModTime().UTC().Format(time.RFC3339)
 	}
-	entries = append(entries, ManifestEntry{
+	return ManifestEntry{
 		ID:       id,
 		PulledAt: pulledAt,
 		HFCache:  hfCache,
-	})
-	return SaveManifest(entries)
+	}
+}
+
+// ReconcileManifest makes the manifest mirror the HF cache. It registers
+// every cached model missing from the manifest with an empty task tag, which
+// the list/show backfill fills (HF API first, local config.json fallback),
+// and drops every manifest entry whose cache directory no longer exists. It
+// returns the added and dropped model IDs and writes the manifest only when
+// something changed.
+func ReconcileManifest() (added, dropped []string, err error) {
+	entries, err := LoadManifest()
+	if err != nil {
+		return nil, nil, err
+	}
+	cached, err := CachedModelIDs()
+	if err != nil {
+		return nil, nil, err
+	}
+	kept := make([]ManifestEntry, 0, len(entries)+len(cached))
+	inManifest := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		inManifest[e.ID] = true
+		if _, statErr := os.Stat(HFCacheDir(e.ID)); os.IsNotExist(statErr) {
+			dropped = append(dropped, e.ID)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	for _, id := range cached {
+		if inManifest[id] {
+			continue
+		}
+		kept = append(kept, entryFromCache(id))
+		added = append(added, id)
+	}
+	if len(added) == 0 && len(dropped) == 0 {
+		return nil, nil, nil
+	}
+	return added, dropped, SaveManifest(kept)
 }
 
 // RemoveFromManifest removes a model from the manifest.
@@ -276,11 +315,49 @@ func RemoveFromManifest(id string) (ManifestEntry, bool, error) {
 
 // ── HF cache helpers ──────────────────────────────────────────────────────────
 
+// HFHubDir returns the HF hub cache root, ~/.cache/huggingface/hub.
+func HFHubDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".cache", "huggingface", "hub")
+}
+
 // HFCacheDir returns the expected HF cache directory for a model ID.
 func HFCacheDir(id string) string {
-	home, _ := os.UserHomeDir()
-	hfName := "models--" + strings.ReplaceAll(id, "/", "--")
-	return filepath.Join(home, ".cache", "huggingface", "hub", hfName)
+	return filepath.Join(HFHubDir(), "models--"+strings.ReplaceAll(id, "/", "--"))
+}
+
+// ModelIDFromCacheName decodes an HF hub directory name such as
+// models--org--name into the model ID org/name. It reports false for names
+// that are not model cache directories.
+func ModelIDFromCacheName(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "models--")
+	if !ok || rest == "" {
+		return "", false
+	}
+	return strings.ReplaceAll(rest, "--", "/"), true
+}
+
+// CachedModelIDs returns the sorted IDs of every model directory in the HF
+// hub cache. A missing hub directory yields an empty list.
+func CachedModelIDs() ([]string, error) {
+	dirEntries, err := os.ReadDir(HFHubDir())
+	if os.IsNotExist(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, d := range dirEntries {
+		if !d.IsDir() {
+			continue
+		}
+		if id, ok := ModelIDFromCacheName(d.Name()); ok {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // DiskUsage sums the sizes of regular files under dir/blobs/ to avoid

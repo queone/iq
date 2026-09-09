@@ -156,9 +156,12 @@ func newLmListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "list",
 		Aliases:      []string{"ls"},
-		Short:        "List locally available models",
+		Short:        "List models in the local Hugging Face cache",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := reconcileManifest(); err != nil {
+				return err
+			}
 			entries, err := lm.LoadManifest()
 			if err != nil {
 				return err
@@ -215,6 +218,9 @@ func newLmShowCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := reconcileManifest(); err != nil {
+				return err
+			}
 			entries, err := lm.LoadManifest()
 			if err != nil {
 				return err
@@ -230,7 +236,7 @@ func newLmShowCmd() *cobra.Command {
 				}
 			}
 			if entry == nil {
-				return fmt.Errorf("model %q not found in manifest", id)
+				return fmt.Errorf("model %q not found in manifest or Hugging Face cache", id)
 			}
 
 			// Backfill task tag if missing — try HF API, then local config.json.
@@ -327,6 +333,16 @@ func newLmRmCmd() *cobra.Command {
 			model := args[0]
 			cacheDir := lm.HFCacheDir(model)
 
+			// Accept any model the manifest or the HF cache knows about.
+			_, cacheErr := os.Stat(cacheDir)
+			registered, err := manifestHas(model)
+			if err != nil {
+				return err
+			}
+			if os.IsNotExist(cacheErr) && !registered {
+				return fmt.Errorf("model %q not found in manifest or Hugging Face cache", model)
+			}
+
 			// Warn and auto-clear if model is the embed model.
 			cfg, _ := config.Load(nil)
 			if cfg != nil && model == config.EmbedModel(cfg) {
@@ -380,12 +396,9 @@ func newLmRmCmd() *cobra.Command {
 				}
 			}
 
-			entry, found, err := lm.RemoveFromManifest(model)
+			entry, _, err := lm.RemoveFromManifest(model)
 			if err != nil {
 				return fmt.Errorf("failed to update manifest: %w", err)
-			}
-			if !found {
-				fmt.Fprintf(os.Stderr, "%s\n", color.Gra5("warning: model not found in manifest"))
 			}
 
 			// Use entry's recorded cache path if available, fall back to derived path.
@@ -410,6 +423,47 @@ func newLmRmCmd() *cobra.Command {
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
 	return cmd
+}
+
+// ── manifest helpers ──────────────────────────────────────────────────────────
+
+// reconcileManifest syncs the manifest with the HF cache and notes what changed.
+func reconcileManifest() error {
+	added, dropped, err := lm.ReconcileManifest()
+	if err != nil {
+		return fmt.Errorf("failed to reconcile manifest with Hugging Face cache: %w", err)
+	}
+	if n := len(added); n > 0 {
+		fmt.Fprintf(os.Stderr, "%s\n", color.Gra5(fmt.Sprintf(
+			"note: registered %d cached %s", n, pluralize(n, "model", "models"))))
+	}
+	if n := len(dropped); n > 0 {
+		fmt.Fprintf(os.Stderr, "%s\n", color.Gra5(fmt.Sprintf(
+			"note: dropped %d manifest %s with no cache directory", n, pluralize(n, "entry", "entries"))))
+	}
+	return nil
+}
+
+// manifestHas reports whether the manifest lists the model ID.
+func manifestHas(id string) (bool, error) {
+	entries, err := lm.LoadManifest()
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		if e.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// pluralize picks the singular or plural noun for n.
+func pluralize(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // ── shellescape ───────────────────────────────────────────────────────────────

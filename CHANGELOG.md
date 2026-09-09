@@ -3,6 +3,7 @@
 | Version | Summary |
 |---------|---------|
 | Unreleased | |
+| 0.18.14 | AC19: lm ls/show/rm cover every Hugging Face cache model; lm v0.2.0 |
 | 0.18.13 | AC18: adopt govna v0.54.0 prep pointer-guard fix; add IE1 to plan.md |
 | 0.18.12 | AC17: adopt govna v0.53.0 companion-change release-message rules |
 | 0.18.11 | AC16: adopt govna v0.52.0 shared release-command rules and repo-check registry |

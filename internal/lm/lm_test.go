@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── HFSibling / HFModel ───────────────────────────────────────────────────────
@@ -328,7 +330,7 @@ func TestHFCacheDir(t *testing.T) {
 // ── HFSearch (httptest) ───────────────────────────────────────────────────────
 
 func TestHFSearchCancelledContext(t *testing.T) {
-	// hfAPIBase is a const pointing to HuggingFace — we can't redirect it.
+	// HFAPIBase defaults to HuggingFace; this test stays offline.
 	// Test that a pre-cancelled context causes HFSearch to return an error quickly.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -347,7 +349,7 @@ func TestHFEnrichModelsMock(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// HFEnrichModels calls HFFetchModel which hits hfAPIBase — can't intercept.
+	// HFEnrichModels calls HFFetchModel against HFAPIBase; this test stays offline.
 	// Use a cancelled context so the call returns immediately; verify error is returned.
 	models := []HFModel{{ID: "org/model-a"}, {ID: "org/model-b"}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -361,13 +363,13 @@ func TestHFEnrichModelsMock(t *testing.T) {
 	if models[0].ID != "org/model-a" || models[1].ID != "org/model-b" {
 		t.Errorf("HFEnrichModels: originals mutated, got %+v", models)
 	}
-	_ = srv // server is created for documentation; actual calls go to hfAPIBase
+	_ = srv // server is created for documentation; actual calls go to HFAPIBase
 }
 
 // ── HFFetchModel (cancelled context) ─────────────────────────────────────────
 
 func TestHFFetchModelCancelledContext(t *testing.T) {
-	// hfAPIBase points to HuggingFace — we can't redirect it. Use a cancelled
+	// HFAPIBase defaults to HuggingFace; this test stays offline. Use a cancelled
 	// context to verify that the function returns quickly with an error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -394,5 +396,135 @@ func TestSuggestSizeByName(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("SuggestSize(%q) = %q, want %q", tc.id, got, tc.want)
 		}
+	}
+}
+
+// ── HF hub scanning ───────────────────────────────────────────────────────────
+
+func TestModelIDFromCacheName(t *testing.T) {
+	cases := []struct {
+		name   string
+		wantID string
+		wantOK bool
+	}{
+		{"models--org--name", "org/name", true},
+		{"models--gpt2", "gpt2", true},
+		{".locks", "", false},
+		{"datasets--x", "", false},
+		{"models--", "", false},
+	}
+	for _, c := range cases {
+		id, ok := ModelIDFromCacheName(c.name)
+		if id != c.wantID || ok != c.wantOK {
+			t.Errorf("ModelIDFromCacheName(%q) = (%q, %v), want (%q, %v)", c.name, id, ok, c.wantID, c.wantOK)
+		}
+	}
+	// Round-trip through HFCacheDir.
+	got, ok := ModelIDFromCacheName(filepath.Base(HFCacheDir("mlx-community/gemma-3-1b-it-4bit")))
+	if !ok || got != "mlx-community/gemma-3-1b-it-4bit" {
+		t.Errorf("round-trip = (%q, %v)", got, ok)
+	}
+}
+
+// writeCacheDir creates a fake HF cache directory for id under the current
+// HOME, with an optional snapshot config.json, and returns its path.
+func writeCacheDir(t *testing.T, id, configJSON string) string {
+	t.Helper()
+	dir := HFCacheDir(id)
+	if err := os.MkdirAll(filepath.Join(dir, "blobs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if configJSON != "" {
+		snap := filepath.Join(dir, "snapshots", "abc123")
+		if err := os.MkdirAll(snap, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(snap, "config.json"), []byte(configJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestCachedModelIDs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeCacheDir(t, "org/b", "")
+	writeCacheDir(t, "org/a", "")
+	hub := HFHubDir()
+	for _, d := range []string{".locks", "datasets--x"} {
+		if err := os.MkdirAll(filepath.Join(hub, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hub, "models--org--file"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := CachedModelIDs()
+	if err != nil {
+		t.Fatalf("CachedModelIDs() error: %v", err)
+	}
+	want := []string{"org/a", "org/b"}
+	if !slices.Equal(got, want) {
+		t.Errorf("CachedModelIDs() = %v, want %v", got, want)
+	}
+}
+
+func TestCachedModelIDsNoHub(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := CachedModelIDs()
+	if err != nil {
+		t.Fatalf("CachedModelIDs() with no hub error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("CachedModelIDs() with no hub = %v, want empty", got)
+	}
+}
+
+func TestReconcileManifest(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeCacheDir(t, "org/a", "")
+	cDir := writeCacheDir(t, "org/c", `{"model_type":"llama"}`)
+	mtime := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	if err := os.Chtimes(cDir, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveManifest([]ManifestEntry{
+		{ID: "org/a", PulledAt: "2026-01-01T00:00:00Z", HFCache: HFCacheDir("org/a"), Task: "text-generation"},
+		{ID: "org/b", PulledAt: "2026-01-02T00:00:00Z", HFCache: HFCacheDir("org/b")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	added, dropped, err := ReconcileManifest()
+	if err != nil {
+		t.Fatalf("ReconcileManifest() error: %v", err)
+	}
+	if !slices.Equal(added, []string{"org/c"}) || !slices.Equal(dropped, []string{"org/b"}) {
+		t.Errorf("ReconcileManifest() = (added %v, dropped %v), want ([org/c], [org/b])", added, dropped)
+	}
+
+	got, err := LoadManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "org/a" || got[1].ID != "org/c" {
+		t.Fatalf("manifest after reconcile = %+v, want [org/a org/c]", got)
+	}
+	c := got[1]
+	if c.PulledAt != mtime.Format(time.RFC3339) {
+		t.Errorf("org/c pulled_at = %q, want %q", c.PulledAt, mtime.Format(time.RFC3339))
+	}
+	if c.HFCache != cDir {
+		t.Errorf("org/c hf_cache_path = %q, want %q", c.HFCache, cDir)
+	}
+	if c.Task != "" {
+		t.Errorf("org/c task = %q, want empty (left to the list/show backfill)", c.Task)
+	}
+
+	// A second reconcile changes nothing.
+	added, dropped, err = ReconcileManifest()
+	if err != nil || len(added) != 0 || len(dropped) != 0 {
+		t.Errorf("second ReconcileManifest() = (%v, %v, %v), want no change", added, dropped, err)
 	}
 }
