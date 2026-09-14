@@ -32,54 +32,28 @@ func openInEditor(path string) error {
 	return cmd.Run()
 }
 
-// ── Help ──────────────────────────────────────────────────────────────────────
-
-func printCueHelp() {
-	n := programName
-	fmt.Printf("Work with IQ cues.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s cue <command> [flags]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-10s %s\n", "ls|list", "List all cues")
-	fmt.Printf("  %-10s %s\n", "show", "Show full details for a cue")
-	fmt.Printf("  %-10s %s\n", "add", "Add a new cue")
-	fmt.Printf("  %-10s %s\n", "edit", "Edit an existing cue in $EDITOR")
-	fmt.Printf("  %-10s %s\n", "rm", "Remove a cue")
-	fmt.Printf("  %-10s %s\n", "assign", "Assign a model to a cue")
-	fmt.Printf("  %-10s %s\n", "unassign", "Clear the model assignment for a cue")
-	fmt.Printf("  %-10s %s\n", "reset", "Reset all or one cue to factory defaults")
-	fmt.Printf("  %-10s %s\n\n", "sync", "Add new built-in cues without overwriting existing ones")
-	fmt.Printf("%s\n", color.Whi9("INHERITED FLAGS"))
-	fmt.Printf("  %-30s %s\n\n", "-h, --help", "Show help for command")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s cue list\n", n)
-	fmt.Printf("  $ %s cue list --category reasoning\n", n)
-	fmt.Printf("  $ %s cue show math\n", n)
-	fmt.Printf("  $ %s cue add my_custom_cue\n", n)
-	fmt.Printf("  $ %s cue edit math\n", n)
-	fmt.Printf("  $ %s cue assign math mlx-community/gemma-3-1b-it-4bit\n", n)
-	fmt.Printf("  $ %s cue unassign math\n", n)
-	fmt.Printf("  $ %s cue rm my_custom_cue\n", n)
-	fmt.Printf("  $ %s cue reset\n", n)
-	fmt.Printf("  $ %s cue reset math\n", n)
-	fmt.Printf("  $ %s cue sync\n", n)
-}
-
 // ── Root cue command ──────────────────────────────────────────────────────────
 
 func newCueCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "cue",
-		Short:        "Work with IQ cues",
+		Use:   "cue",
+		Short: "Manage the cue library",
+		Example: "$ iq cue list\n" +
+			"$ iq cue list --category reasoning\n" +
+			"$ iq cue show math\n" +
+			"$ iq cue add my_custom_cue\n" +
+			"$ iq cue edit math\n" +
+			"$ iq cue assign math mlx-community/gemma-3-1b-it-4bit\n" +
+			"$ iq cue unassign math\n" +
+			"$ iq cue rm my_custom_cue\n" +
+			"$ iq cue reset\n" +
+			"$ iq cue reset math\n" +
+			"$ iq cue sync",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			printCueHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printCueHelp()
-	})
 
 	cmd.AddCommand(
 		newCueListCmd(),
@@ -144,7 +118,7 @@ func newCueListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&category, "category", "c", "", "Filter by category")
+	cmd.Flags().StringVarP(&category, "category", "c", "", "Filter by category `NAME`")
 	return cmd
 }
 
@@ -199,7 +173,7 @@ func newCueAddCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "add <name>",
-		Short:        "Add a new cue",
+		Short:        "Add a new cue; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -261,9 +235,9 @@ system_prompt: |
 		},
 	}
 
-	cmd.Flags().StringVarP(&category, "category", "c", "", "Category for the new cue")
-	cmd.Flags().StringVarP(&description, "description", "d", "", "Short description")
-	cmd.Flags().StringVarP(&tier, "tier", "t", "balanced", "Suggested model tier")
+	cmd.Flags().StringVarP(&category, "category", "c", "", "Category `NAME` for the new cue")
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Short description `TEXT`")
+	cmd.Flags().StringVarP(&tier, "tier", "t", "balanced", "Suggested model `TIER`")
 	return cmd
 }
 
@@ -272,7 +246,7 @@ system_prompt: |
 func newCueEditCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "edit <name>",
-		Short:        "Edit an existing cue in $EDITOR",
+		Short:        "Edit a cue in $EDITOR; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -343,7 +317,7 @@ func newCueRmCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "rm <name>",
-		Short:        "Remove a cue",
+		Short:        "Remove a cue; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -378,7 +352,7 @@ func newCueRmCmd() *cobra.Command {
 func newCueAssignCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "assign <name> <model>",
-		Short:        "Assign a model to a cue",
+		Short:        "Assign a model to a cue; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -416,7 +390,7 @@ func newCueAssignCmd() *cobra.Command {
 func newCueUnassignCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "unassign <name>",
-		Short:        "Clear the model assignment for a cue",
+		Short:        "Clear a cue's model assignment; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -448,7 +422,7 @@ func newCueUnassignCmd() *cobra.Command {
 func newCueResetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "reset [name]",
-		Short:        "Reset all or one cue to factory defaults",
+		Short:        "Reset all or one cue to factory defaults; writes the cue library",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -564,7 +538,7 @@ func newCueResetCmd() *cobra.Command {
 func newCueSyncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "sync",
-		Short:        "Add new built-in cues without overwriting existing ones",
+		Short:        "Add new built-in cues without overwriting existing ones; writes the cue library",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			defaults, err := cue.LoadDefaults()

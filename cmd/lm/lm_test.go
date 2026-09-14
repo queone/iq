@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"iq/internal/lm"
+	"iq/internal/usage/usagetest"
 )
 
 // pointAPIAtTestServer redirects Hugging Face API calls to a local server that
@@ -63,7 +64,7 @@ func TestListRegistersCachedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := runCLIOutput(t, "ls")
+	stdout, stderr := usagetest.RunCLI(t, programName, runCLI, "ls")
 	for _, id := range []string{"org/reg", "org/new"} {
 		if !strings.Contains(stdout, id) {
 			t.Errorf("lm ls stdout missing %q:\n%s", id, stdout)
@@ -90,7 +91,7 @@ func TestListDropsStaleManifestEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := runCLIOutput(t, "ls")
+	stdout, stderr := usagetest.RunCLI(t, programName, runCLI, "ls")
 	if strings.Contains(stdout, "org/gone") {
 		t.Errorf("lm ls stdout still lists org/gone:\n%s", stdout)
 	}
@@ -111,7 +112,7 @@ func TestRmUnregisteredCachedModel(t *testing.T) {
 	pointAPIAtTestServer(t, "")
 	dir := writeCachedModel(t, "org/x")
 
-	stdout, stderr := runCLIOutput(t, "rm", "-f", "org/x")
+	stdout, stderr := usagetest.RunCLI(t, programName, runCLI, "rm", "-f", "org/x")
 	if stdout != "Removed org/x\n" {
 		t.Errorf("lm rm stdout = %q, want %q", stdout, "Removed org/x\n")
 	}

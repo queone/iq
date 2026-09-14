@@ -26,21 +26,21 @@ func TestHelpFlagsPrintIdenticalPages(t *testing.T) {
 }
 
 func TestHelpCommandRoutesToSubcommand(t *testing.T) {
-	want, _ := usagetest.RunCLI(t, programName, runCLI, "perf", "bench", "-h")
-	for _, args := range [][]string{{"help", "perf", "bench"}, {"-h", "perf", "bench"}, {"perf", "bench", "-?"}} {
+	want, _ := usagetest.RunCLI(t, programName, runCLI, "config", "show", "-h")
+	for _, args := range [][]string{{"help", "config", "show"}, {"-h", "config", "show"}, {"config", "show", "-?"}} {
 		got, stderr := usagetest.RunCLI(t, programName, runCLI, args...)
 		if got != want || stderr != "" {
-			t.Errorf("%q differs from 'perf bench -h' (stderr=%q):\n%s", args, stderr, got)
+			t.Errorf("%q differs from 'config show -h' (stderr=%q):\n%s", args, stderr, got)
 		}
 	}
-	if !strings.Contains(want, "\nUsage\n  lm perf bench [options]\n") {
-		t.Errorf("perf bench help lacks its synopsis:\n%s", want)
+	if !strings.Contains(want, "\nUsage\n  kb config show [options]\n") {
+		t.Errorf("config show help lacks its synopsis:\n%s", want)
 	}
 }
 
-func TestVersionAliases(t *testing.T) {
+func TestVersionFlagWorksOnEveryCommand(t *testing.T) {
 	want := programName + " v" + programVersion + "\n"
-	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}, {"ver"}, {"list", "-v"}, {"perf", "show", "--version"}} {
+	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}, {"ver"}, {"list", "-v"}, {"config", "show", "--version"}} {
 		got, stderr := usagetest.RunCLI(t, programName, runCLI, args...)
 		if got != want || stderr != "" {
 			t.Errorf("%q: stdout=%q stderr=%q, want %q", args, got, stderr, want)

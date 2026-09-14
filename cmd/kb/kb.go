@@ -20,7 +20,7 @@ func newKbIngestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "ingest <path>",
 		Aliases:      []string{"in"},
-		Short:        "Ingest a file or directory into the knowledge base",
+		Short:        "Ingest a file or directory tree; writes the knowledge-base index",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -153,14 +153,14 @@ func newKbSearchCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().IntVarP(&topK, "top", "k", kb.DefaultK, "Number of results to return")
+	cmd.Flags().IntVarP(&topK, "top", "k", kb.DefaultK, "Return at most `N` results")
 	return cmd
 }
 
 func newKbRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "rm <path>",
-		Short:        "Remove a source from the knowledge base",
+		Short:        "Remove a source; writes the knowledge-base index",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -199,7 +199,7 @@ func newKbRmCmd() *cobra.Command {
 func newKbClearCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "clear",
-		Short:        "Wipe the entire knowledge base",
+		Short:        "Wipe the knowledge-base index",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := kbIndexPath()

@@ -188,20 +188,6 @@ func printStatus() error {
 	return nil
 }
 
-// ── Help ──────────────────────────────────────────────────────────────────────
-
-func printSvcHelp() {
-	n := programName
-	fmt.Printf("Legacy alias — svc commands have moved to the root.\n\n")
-	fmt.Printf("%s\n", color.Whi9("NEW USAGE"))
-	fmt.Printf("  %s start [model]\n", n)
-	fmt.Printf("  %s stop [model]\n", n)
-	fmt.Printf("  %s status\n", n)
-	fmt.Printf("  %s pool list|add|rm\n", n)
-	fmt.Printf("  %s embed show|set|rm\n", n)
-	fmt.Printf("  %s doc\n", n)
-}
-
 // ── Root svc command ──────────────────────────────────────────────────────────
 
 // newSvcCmd returns a hidden backward-compat alias that delegates to the
@@ -213,13 +199,9 @@ func newSvcCmd() *cobra.Command {
 		Short:        "Legacy alias — use root-level commands instead",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			printSvcHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printSvcHelp()
-	})
 	cmd.AddCommand(
 		newSvcStatusCmd(),
 		newStartCmd(),
@@ -238,7 +220,7 @@ func newSvcStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
 		Aliases:      []string{"st"},
-		Short:        "Show running sidecar status and memory usage",
+		Short:        "Show running sidecars and memory use",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return printStatus()
@@ -251,7 +233,7 @@ func newSvcStatusCmd() *cobra.Command {
 func newStartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "start [model]",
-		Short:        "Start sidecars for all assigned models, or a specific model",
+		Short:        "Start sidecars for all pool models or one model; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -325,7 +307,7 @@ func newStartCmd() *cobra.Command {
 func newStopCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "stop [model]",
-		Short:        "Stop sidecars for all assigned models, or a specific model",
+		Short:        "Stop sidecars for all pool models or one model; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -359,7 +341,7 @@ func newStopCmd() *cobra.Command {
 func newRestartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "restart [model]",
-		Short:        "Restart sidecars (stop then start)",
+		Short:        "Stop then start sidecars; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -402,34 +384,19 @@ func newRestartCmd() *cobra.Command {
 
 // ── pool ──────────────────────────────────────────────────────────────────────
 
-func printPoolHelp() {
-	n := programName
-	fmt.Printf("Manage the inference model pool.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s pool [command]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-10s %s\n", "list", "List models in the pool (default)")
-	fmt.Printf("  %-10s %s\n", "add <model>", "Add a model to the pool")
-	fmt.Printf("  %-10s %s\n\n", "rm <model>", "Remove a model from the pool")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s pool\n", n)
-	fmt.Printf("  $ %s pool add mlx-community/Llama-3.2-3B-Instruct-4bit\n", n)
-	fmt.Printf("  $ %s pool rm mlx-community/Llama-3.2-3B-Instruct-4bit\n", n)
-}
-
 func newPoolCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "pool",
-		Short:        "Manage the inference model pool",
+		Use:   "pool",
+		Short: "Manage the inference model pool in config.yaml",
+		Example: "$ iq pool\n" +
+			"$ iq pool add mlx-community/Llama-3.2-3B-Instruct-4bit\n" +
+			"$ iq pool rm mlx-community/Llama-3.2-3B-Instruct-4bit",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Bare `iq pool` = `iq pool list`
 			return newPoolListCmd().RunE(cmd, args)
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printPoolHelp()
-	})
 	cmd.AddCommand(newPoolListCmd(), newPoolAddCmd(), newPoolRmCmd())
 	return cmd
 }
@@ -460,7 +427,7 @@ func newPoolListCmd() *cobra.Command {
 func newPoolAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "add <model>",
-		Short:        "Add a model to the pool",
+		Short:        "Add a model to the pool; writes config.yaml",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -486,7 +453,7 @@ func newPoolAddCmd() *cobra.Command {
 func newPoolRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "rm <model>",
-		Short:        "Remove a model from the pool",
+		Short:        "Remove a model from the pool; writes config.yaml",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -517,39 +484,20 @@ func newPoolRmCmd() *cobra.Command {
 
 // ── embed ─────────────────────────────────────────────────────────────────────
 
-func printEmbedHelp() {
-	n := programName
-	fmt.Printf("Manage the MLX embed model for cue classification and KB retrieval.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s embed <command>\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-24s %s\n", "show", "Show the configured embed model")
-	fmt.Printf("  %-24s %s\n", "set <model>", "Set embed model and restart sidecar")
-	fmt.Printf("  %-24s %s\n\n", "rm", "Revert embed model to default and restart sidecar")
-	fmt.Printf("%s\n", color.Whi9("NOTES"))
-	fmt.Printf("  Models are HF model IDs (mlx-community/*). The model must be\n")
-	fmt.Printf("  downloaded first with 'iq lm get <model>'.\n")
-	fmt.Printf("  Changing embed model invalidates kb.json — re-ingest required.\n\n")
-	fmt.Printf("%s\n", color.Whi9("DEFAULT"))
-	fmt.Printf("  %s\n\n", color.Gra5(config.DefaultEmbedModel))
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s embed show\n", n)
-	fmt.Printf("  $ %s embed set mlx-community/bge-small-en-v1.5-bf16\n", n)
-}
-
 func newEmbedCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "embed",
-		Short:        "Manage embed sidecar models",
+		Use:   "embed",
+		Short: "Manage the embed sidecar model in config.yaml",
+		Long: "Manage the MLX embed model used for cue classification and knowledge-base retrieval. " +
+			"Models are Hugging Face IDs (mlx-community/*) downloaded first with 'lm get MODEL'. " +
+			"Changing the embed model invalidates kb.json, so re-ingest afterwards. " +
+			"Default: " + config.DefaultEmbedModel + ".",
+		Example:      "$ iq embed show\n$ iq embed set mlx-community/bge-small-en-v1.5-bf16",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			printEmbedHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printEmbedHelp()
-	})
 	cmd.AddCommand(newEmbedShowCmd(), newEmbedSetCmd(), newEmbedRmCmd())
 	return cmd
 }
@@ -557,7 +505,7 @@ func newEmbedCmd() *cobra.Command {
 func newEmbedShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "show",
-		Short:        "Show configured embed model",
+		Short:        "Show the configured embed model",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(nil)
@@ -577,7 +525,7 @@ func newEmbedShowCmd() *cobra.Command {
 func newEmbedSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "set <model>",
-		Short:        "Set embed model and restart sidecar",
+		Short:        "Set the embed model and restart its sidecar; writes config.yaml",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -607,7 +555,7 @@ func newEmbedSetCmd() *cobra.Command {
 func newEmbedRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "rm",
-		Short:        "Revert embed model to default and restart sidecar",
+		Short:        "Revert the embed model to default and restart its sidecar; writes config.yaml",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -166,7 +166,7 @@ func printStatus() error {
 func newStartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "start [model]",
-		Short:        "Start embed sidecar, or a specific inference model",
+		Short:        "Start the embed sidecar or one inference model; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -192,7 +192,7 @@ func newStartCmd() *cobra.Command {
 func newStopCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "stop [model]",
-		Short:        "Stop sidecars",
+		Short:        "Stop sidecars; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -222,7 +222,7 @@ func newStopCmd() *cobra.Command {
 func newRestartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "restart [model]",
-		Short:        "Restart sidecars (stop then start)",
+		Short:        "Stop then start sidecars; writes run state",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {

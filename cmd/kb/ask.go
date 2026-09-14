@@ -29,9 +29,9 @@ type askOpts struct {
 
 // addAskFlags binds ask flags onto cmd, writing into opts.
 func addAskFlags(cmd *cobra.Command, opts *askOpts) {
-	cmd.Flags().StringVar(&opts.model, "model", "", "Override inference model (must be running)")
+	cmd.Flags().StringVarP(&opts.model, "model", "m", "", "Override the inference model with running model `ID`")
 	cmd.Flags().BoolVarP(&opts.noKB, "no-kb", "K", false, "Skip KB retrieval, run pure inference")
-	cmd.Flags().IntVarP(&opts.topK, "top-k", "k", kb.DefaultK, "Number of KB chunks to retrieve")
+	cmd.Flags().IntVarP(&opts.topK, "top-k", "k", kb.DefaultK, "Retrieve at most `N` knowledge-base chunks")
 }
 
 func newAskCmd() *cobra.Command {

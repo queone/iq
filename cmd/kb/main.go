@@ -10,11 +10,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"iq/internal/color"
+	"iq/internal/usage"
 )
 
 const (
 	programName    = "kb"
-	programVersion = "0.1.0"
+	programVersion = "0.2.0"
+	programURL     = "iq/cmd/kb"
+	programSummary = "Private knowledge base — ingest, search, ask"
 )
 
 // errSilent is returned when the error has already been printed.
@@ -36,61 +39,22 @@ func argsUsage(v cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
-func printRootHelp() {
-	n := programName
-	fmt.Printf("%s v%s\n", n, programVersion)
-	fmt.Printf("Private knowledge base — ingest, search, ask.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s <command> [flags]\n", n)
-	fmt.Printf("  %s [flags] <query>\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("SERVICE"))
-	fmt.Printf("  %-24s %s\n", "start [model]", "Start sidecars")
-	fmt.Printf("  %-24s %s\n", "stop [model]", "Stop sidecars")
-	fmt.Printf("  %-24s %s\n", "restart [model]", "Restart sidecars (stop + start)")
-	fmt.Printf("  %-24s %s\n\n", "st|status", "Show running sidecar status")
-	fmt.Printf("%s\n", color.Whi9("KNOWLEDGE BASE"))
-	fmt.Printf("  %-24s %s\n", "ingest, in <path>", "Ingest a file or directory tree")
-	fmt.Printf("  %-24s %s\n", "list", "Show indexed sources")
-	fmt.Printf("  %-24s %s\n", "search <query>", "Raw similarity search (no inference)")
-	fmt.Printf("  %-24s %s\n", "rm <path>", "Remove a source from the index")
-	fmt.Printf("  %-24s %s\n\n", "clear", "Wipe the knowledge base")
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-24s %s\n", "ask <query>", "Ask using KB-grounded inference")
-	fmt.Printf("  %-24s %s\n", "cfg|config", "Inspect KB configuration")
-	fmt.Printf("  %-24s %s\n\n", "version", "Show the current KB version")
-	fmt.Printf("%s\n", color.Whi9("FLAGS"))
-	fmt.Printf("  %-24s %s\n", "    --model <id>", "Override inference model (must be running)")
-	fmt.Printf("  %-24s %s\n", "-K, --no-kb", "Skip KB retrieval, run pure inference")
-	fmt.Printf("  %-24s %s\n", "-k, --top-k <n>", "Number of KB chunks to retrieve")
-	fmt.Printf("  %-24s %s\n\n", "-h, -?, --help", "Show this help or help for a subcommand")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s ingest ~/projects/notes\n", n)
-	fmt.Printf("  $ %s list\n", n)
-	fmt.Printf("  $ %s \"how does auth work\"\n", n)
-	fmt.Printf("  $ %s ask \"explain the key concepts\"\n", n)
-	fmt.Printf("  $ %s start && %s \"what is X?\"\n", n, n)
-}
-
 func newVersionCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:     "version",
 		Aliases: []string{"ver"},
-		Short:   "Show the current KB version",
+		Short:   "Print the kb version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("%s v%s\n", programName, programVersion)
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		fmt.Printf("%s v%s\n", programName, programVersion)
-	})
-	return cmd
 }
 
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
 		Aliases:      []string{"st"},
-		Short:        "Show running sidecar status",
+		Short:        "Show running sidecars and memory use",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return printStatus()
@@ -98,33 +62,24 @@ func newStatusCmd() *cobra.Command {
 	}
 }
 
-func runCLI() {
-	// Rewrite "-?" → "-h" so cobra sees a standard help flag.
-	for i := 1; i < len(os.Args); i++ {
-		if os.Args[i] == "-?" {
-			os.Args[i] = "-h"
-		}
-	}
-
-	// Rewrite "kb -h <cmd>" → "kb <cmd> -h" so cobra routes correctly.
-	if len(os.Args) == 3 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
-		os.Args = []string{os.Args[0], os.Args[2], "-h"}
-	}
-
+// newRootCmd wires every kb command under one root whose help pages share one renderer.
+func newRootCmd() *cobra.Command {
+	cobra.EnableCommandSorting = false
 	var rootOpts askOpts
 
 	root := &cobra.Command{
 		Use:          programName,
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
+		Annotations:  map[string]string{usage.SynopsisKey: "[options] QUERY"},
+		Example: "$ kb ingest ~/projects/notes\n" +
+			"$ kb list\n" +
+			"$ kb \"how does auth work\"\n" +
+			"$ kb ask \"explain the key concepts\"\n" +
+			"$ kb start && kb \"what is X?\"",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if v, _ := cmd.Flags().GetBool("version"); v {
-				fmt.Printf("%s v%s\n", programName, programVersion)
-				return nil
-			}
 			if len(args) == 0 {
-				printRootHelp()
-				return nil
+				return cmd.Help()
 			}
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer cancel()
@@ -133,15 +88,12 @@ func runCLI() {
 		},
 	}
 
-	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printRootHelp()
-	})
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.Flags().BoolP("version", "v", false, "An alias for the \"version\" subcommand.")
+	root.SilenceErrors = true
 	addAskFlags(root, &rootOpts)
 
 	root.AddCommand(
-		newVersionCmd(),
+		newAskCmd(),
 		newStartCmd(),
 		newStopCmd(),
 		newRestartCmd(),
@@ -151,12 +103,26 @@ func runCLI() {
 		newKbSearchCmd(),
 		newKbRmCmd(),
 		newKbClearCmd(),
-		newAskCmd(),
 		newConfigCmd(),
+		newVersionCmd(),
 	)
 
-	root.SilenceErrors = true
+	usage.Install(root, usage.Header{
+		Name:        programName,
+		Version:     programVersion,
+		Description: programSummary,
+		URL:         programURL,
+	})
+	return root
+}
+
+func runCLI() {
+	root := newRootCmd()
+	root.SetArgs(usage.NormalizeArgs(os.Args[1:]))
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, usage.ErrVersionPrinted) {
+			return
+		}
 		if !errors.Is(err, errSilent) {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		}

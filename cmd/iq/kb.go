@@ -16,43 +16,23 @@ import (
 	"iq/internal/kb"
 )
 
-// ── Help ──────────────────────────────────────────────────────────────────────
-
-func printKBHelp() {
-	n := programName
-	fmt.Printf("Manage the IQ knowledge base for RAG-augmented prompts.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s kb <command> [flags]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-12s %s\n", "ingest, in", "Ingest a file or directory tree into the knowledge base")
-	fmt.Printf("  %-12s %s\n", "list", "Show indexed sources")
-	fmt.Printf("  %-12s %s\n", "search", "Run a raw similarity search (no inference)")
-	fmt.Printf("  %-12s %s\n", "rm", "Remove a source from the knowledge base")
-	fmt.Printf("  %-12s %s\n\n", "clear", "Wipe the entire knowledge base")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s kb ingest ~/projects/myapp\n", n)
-	fmt.Printf("  $ %s kb ingest ./README.md\n", n)
-	fmt.Printf("  $ %s kb list\n", n)
-	fmt.Printf("  $ %s kb search \"how does auth work\"\n", n)
-	fmt.Printf("  $ %s kb rm ~/projects/myapp\n", n)
-	fmt.Printf("  $ %s kb clear\n", n)
-}
-
 // ── Command ───────────────────────────────────────────────────────────────────
 
 func newKbCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "kb",
-		Short:        "Manage the IQ knowledge base",
+		Use:   "kb",
+		Short: "Manage the knowledge-base index",
+		Example: "$ iq kb ingest ~/projects/myapp\n" +
+			"$ iq kb ingest ./README.md\n" +
+			"$ iq kb list\n" +
+			"$ iq kb search \"how does auth work\"\n" +
+			"$ iq kb rm ~/projects/myapp\n" +
+			"$ iq kb clear",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			printKBHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printKBHelp()
-	})
 	cmd.AddCommand(
 		newKbIngestCmd(),
 		newKbListCmd(),
@@ -67,7 +47,7 @@ func newKbIngestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "ingest <path>",
 		Aliases:      []string{"in"},
-		Short:        "Ingest a file or directory into the knowledge base",
+		Short:        "Ingest a file or directory tree; writes the knowledge-base index",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -190,14 +170,14 @@ func newKbSearchCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().IntVarP(&topK, "top", "k", kb.DefaultK, "Number of results to return")
+	cmd.Flags().IntVarP(&topK, "top", "k", kb.DefaultK, "Return at most `N` results")
 	return cmd
 }
 
 func newKbRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "rm <path>",
-		Short:        "Remove a source from the knowledge base",
+		Short:        "Remove a source; writes the knowledge-base index",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -228,7 +208,7 @@ func newKbRmCmd() *cobra.Command {
 func newKbClearCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "clear",
-		Short:        "Wipe the entire knowledge base",
+		Short:        "Wipe the knowledge-base index",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := kb.Path()

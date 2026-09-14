@@ -72,7 +72,7 @@ func newLmSearchCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "Max number of results to return")
+	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "Return at most `N` results")
 	return cmd
 }
 
@@ -81,7 +81,7 @@ func newLmSearchCmd() *cobra.Command {
 func newLmGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "get <model>",
-		Short:        "Download a model from the registry",
+		Short:        "Download a model into the Hugging Face cache",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -214,7 +214,7 @@ func newLmListCmd() *cobra.Command {
 func newLmShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "show <model>",
-		Short:        "Show details for a specific model",
+		Short:        "Show details for a model",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -326,7 +326,7 @@ func newLmRmCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "rm <model>",
-		Short:        "Remove a model",
+		Short:        "Remove a model from the Hugging Face cache",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {

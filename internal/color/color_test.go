@@ -42,6 +42,8 @@ func TestHelpers(t *testing.T) {
 		{name: "Red5", fn: Red5, code: "38;5;196"},
 		{name: "Whi5", fn: Whi5, code: "38;5;231"},
 		{name: "Whi9", fn: Whi9, code: "38;5;255"},
+		{name: "Whi5B", fn: Whi5B, code: "1;38;5;231"},
+		{name: "Gra2", fn: Gra2, code: "38;5;242"},
 		{name: "Yel5", fn: Yel5, code: "38;5;220"},
 	}
 
@@ -78,6 +80,8 @@ func TestHelpersUseSprint(t *testing.T) {
 		{name: "Red5", fn: Red5},
 		{name: "Whi5", fn: Whi5},
 		{name: "Whi9", fn: Whi9},
+		{name: "Whi5B", fn: Whi5B},
+		{name: "Gra2", fn: Gra2},
 		{name: "Yel5", fn: Yel5},
 	} {
 		t.Run(test.name, func(t *testing.T) {

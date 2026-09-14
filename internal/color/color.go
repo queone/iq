@@ -46,5 +46,11 @@ func Whi5(value any) string { return wrap("38;5;231", value) }
 // Whi9 renders value in bright white.
 func Whi9(value any) string { return wrap("38;5;255", value) }
 
+// Whi5B renders value in bold canonical white with one escape sequence.
+func Whi5B(value any) string { return wrap("1;38;5;231", value) }
+
+// Gra2 renders value in dark gray.
+func Gra2(value any) string { return wrap("38;5;242", value) }
+
 // Yel5 renders value in canonical yellow.
 func Yel5(value any) string { return wrap("38;5;220", value) }

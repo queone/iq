@@ -901,45 +901,24 @@ func runToolBench(modelID string, corpus *benchCorpus, verbose bool) (BenchResul
 
 // ── Cobra Commands ────────────────────────────────────────────────────────
 
-func printPerfHelp() {
-	fmt.Printf("Benchmark model performance\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  lm perf <subcommand> [flags]\n\n")
-	fmt.Printf("%s\n", color.Whi9("SUBCOMMANDS"))
-	fmt.Printf("  %-15s %s\n", "bench", "Run benchmark for a model")
-	fmt.Printf("  %-15s %s\n", "sweep", "Auto-assign, start, bench, stop across N models")
-	fmt.Printf("  %-15s %s\n", "show", "Show benchmark comparison table")
-	fmt.Printf("  %-15s %s\n\n", "clear", "Remove benchmark results")
-	fmt.Printf("%s\n", color.Whi9("FLAGS"))
-	fmt.Printf("  --type kb|cue|tool|infer  Benchmark type (default: all applicable)\n")
-	fmt.Printf("  --model <id>              Model ID to benchmark (required for infer/tool)\n")
-	fmt.Printf("  --models <id,id,...>       Comma-separated model IDs for comparison benchmarks\n")
-	fmt.Printf("  -v, --verbose             Show debug detail for each prompt (tool bench)\n\n")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  lm perf bench --type kb\n")
-	fmt.Printf("  lm perf bench --type cue\n")
-	fmt.Printf("  lm perf bench --type infer --model mlx-community/gemma-3-1b-it-4bit\n")
-	fmt.Printf("  lm perf bench --type tool --model mlx-community/Meta-Llama-3.1-8B-Instruct-4bit\n")
-	fmt.Printf("  lm perf bench --type cue --models model-a,model-b,model-c\n")
-	fmt.Printf("  lm perf sweep --models model-a,model-b --type infer\n")
-	fmt.Printf("  lm perf show\n")
-	fmt.Printf("  lm perf show --type kb\n")
-	fmt.Printf("  lm perf clear --model <id>\n")
-}
-
 func newPerfCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "perf",
-		Short:        "Benchmark IQ model performance",
+		Use:   "perf",
+		Short: "Benchmark model performance; writes benchmark results",
+		Example: "$ lm perf bench --type kb\n" +
+			"$ lm perf bench --type cue\n" +
+			"$ lm perf bench --type infer --model mlx-community/gemma-3-1b-it-4bit\n" +
+			"$ lm perf bench --type tool --model mlx-community/Meta-Llama-3.1-8B-Instruct-4bit\n" +
+			"$ lm perf bench --type cue --models model-a,model-b,model-c\n" +
+			"$ lm perf sweep --models model-a,model-b --type infer\n" +
+			"$ lm perf show\n" +
+			"$ lm perf show --type kb\n" +
+			"$ lm perf clear --model ID",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			printPerfHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printPerfHelp()
-	})
 	cmd.AddCommand(newPerfBenchCmd(), newPerfSweepCmd(), newPerfShowCmd(), newPerfClearCmd())
 	return cmd
 }
@@ -952,7 +931,7 @@ func newPerfBenchCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "bench",
-		Short:        "Run benchmark for a model (or compare multiple with --models)",
+		Short:        "Benchmark one model or compare several; writes benchmark results",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			corpus, err := loadBenchCorpus()
@@ -1094,10 +1073,10 @@ func newPerfBenchCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&benchType, "type", "", "Benchmark type: cue, kb, tool, infer")
-	cmd.Flags().StringVar(&modelID, "model", "", "Model ID to benchmark")
-	cmd.Flags().StringVar(&modelsFlag, "models", "", "Comma-separated model IDs for comparison benchmarks")
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show debug detail for each prompt (tool bench)")
+	cmd.Flags().StringVarP(&benchType, "type", "t", "", "Benchmark `TYPE`: cue, kb, tool, infer")
+	cmd.Flags().StringVarP(&modelID, "model", "m", "", "Model `ID` to benchmark")
+	cmd.Flags().StringVarP(&modelsFlag, "models", "M", "", "Comma-separated model `IDS` for comparison benchmarks")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "V", false, "Show debug detail for each prompt (tool bench)")
 	return cmd
 }
 
@@ -1111,7 +1090,7 @@ func newPerfSweepCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "sweep",
-		Short:        "Auto-assign, start, bench, stop across N models",
+		Short:        "Start, benchmark, and stop each listed model; writes benchmark results",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if modelsFlag == "" {
@@ -1234,9 +1213,9 @@ func newPerfSweepCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&modelsFlag, "models", "", "Comma-separated model IDs to sweep (required)")
-	cmd.Flags().StringVar(&benchType, "type", "", "Benchmark type: infer, tool, kb, cue (default: infer)")
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show debug detail for each prompt (tool bench)")
+	cmd.Flags().StringVarP(&modelsFlag, "models", "M", "", "Comma-separated model `IDS` to sweep (required)")
+	cmd.Flags().StringVarP(&benchType, "type", "t", "", "Benchmark `TYPE`: infer, tool, kb, cue (default: infer)")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "V", false, "Show debug detail for each prompt (tool bench)")
 	return cmd
 }
 
@@ -1282,8 +1261,8 @@ func newPerfShowCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&modelID, "model", "", "Filter by model ID")
-	cmd.Flags().StringVar(&benchType, "type", "", "Filter by type: cue, kb, infer")
+	cmd.Flags().StringVarP(&modelID, "model", "m", "", "Filter by model `ID`")
+	cmd.Flags().StringVarP(&benchType, "type", "t", "", "Filter by `TYPE`: cue, kb, infer")
 	return cmd
 }
 
@@ -1292,7 +1271,7 @@ func newPerfClearCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "clear",
-		Short:        "Remove benchmark results",
+		Short:        "Delete benchmark results",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bs, err := loadBenchStore()
@@ -1327,6 +1306,6 @@ func newPerfClearCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&modelID, "model", "", "Model ID to clear (clear all if unset)")
+	cmd.Flags().StringVarP(&modelID, "model", "m", "", "Model `ID` to clear (clear all if unset)")
 	return cmd
 }

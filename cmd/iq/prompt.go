@@ -1224,56 +1224,23 @@ func runREPL(ctx context.Context, opts promptOpts) error {
 	return nil
 }
 
-// ── Help ──────────────────────────────────────────────────────────────────────
-
-func printPromptHelp() {
-	n := programName
-	fmt.Printf("Start the interactive REPL or send a prompt. For one-shot prompts, '%s <message>' works too.\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s ask [flags] [message]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("FLAGS"))
-	fmt.Printf("  %-32s %s\n", "-r, --cue <n>", "Skip classification, use this cue")
-	fmt.Printf("  %-32s %s\n", "-c, --category <n>", "Classify within a category only")
-	fmt.Printf("  %-32s %s\n", "    --model <id>", "Override model directly (must be running)")
-	fmt.Printf("  %-32s %s\n", "-s, --session <id>", "Load/continue a session by ID")
-	fmt.Printf("  %-32s %s\n", "-n, --dry-run", "Trace steps 1–4, skip inference")
-	fmt.Printf("  %-32s %s\n", "    --dump-prompt <f>", "Write assembled messages as JSON (- for stdout), skip inference")
-	fmt.Printf("  %-32s %s\n", "-d, --debug", "Trace all steps including inference")
-	fmt.Printf("  %-32s %s\n", "-K, --no-kb", "Disable knowledge base retrieval for this prompt")
-	fmt.Printf("  %-32s %s\n", "    --no-cache", "Disable response cache")
-	fmt.Printf("  %-32s %s\n", "-T, --tools", "Force enable read-only tool use")
-	fmt.Printf("  %-32s %s\n", "    --no-tools", "Disable tool use")
-	fmt.Printf("  %-32s %s\n\n", "    --no-stream", "Collect full response before printing")
-	fmt.Printf("%s\n", color.Whi9("INHERITED FLAGS"))
-	fmt.Printf("  %-32s %s\n\n", "-h, -?, --help", "Show help for command")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s ask \"explain transformers\"\n", n)
-	fmt.Printf("  $ %s ask -n \"explain transformers\"\n", n)
-	fmt.Printf("  $ %s ask -d \"explain transformers\"\n", n)
-	fmt.Printf("  $ %s ask --cue math \"solve x^2 + 3x - 4\"\n", n)
-	fmt.Printf("  $ %s ask --category code \"write a binary search in Go\"\n", n)
-	fmt.Printf("  $ %s ask --session abc123 \"continue from before\"\n", n)
-	fmt.Printf("  $ %s ask\n", n)
-	fmt.Printf("  $ echo \"translate to French: hello\" | %s ask\n", n)
-}
-
 // ── Shared flag wiring ────────────────────────────────────────────────────────
 
 // addPromptFlags registers prompt flags on cmd, bound to opts.
 func addPromptFlags(cmd *cobra.Command, opts *promptOpts) {
 	var toolsOn, noTools bool
-	cmd.Flags().StringVarP(&opts.cueName, "cue", "r", "", "Skip classification, use this cue")
-	cmd.Flags().StringVarP(&opts.category, "category", "c", "", "Classify within a category only")
-	cmd.Flags().StringVar(&opts.model, "model", "", "Override model directly (must be running)")
-	cmd.Flags().StringVarP(&opts.sessionID, "session", "s", "", "Load/continue a session by ID")
+	cmd.Flags().StringVarP(&opts.cueName, "cue", "r", "", "Skip classification, use cue `NAME`")
+	cmd.Flags().StringVarP(&opts.category, "category", "c", "", "Classify within category `NAME` only")
+	cmd.Flags().StringVarP(&opts.model, "model", "m", "", "Override the model with running model `ID`")
+	cmd.Flags().StringVarP(&opts.sessionID, "session", "s", "", "Load or continue session `ID`; writes the session file")
 	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "Trace steps 1-4, skip inference")
-	cmd.Flags().StringVar(&opts.dumpPrompt, "dump-prompt", "", "Write assembled message array as JSON to file (- for stdout), skip inference")
+	cmd.Flags().StringVarP(&opts.dumpPrompt, "dump-prompt", "D", "", "Write assembled messages as JSON to `FILE` (- for stdout), skip inference")
 	cmd.Flags().BoolVarP(&opts.debug, "debug", "d", false, "Trace all steps including inference")
 	cmd.Flags().BoolVarP(&opts.noKB, "no-kb", "K", false, "Disable knowledge base retrieval")
-	cmd.Flags().BoolVar(&opts.noCache, "no-cache", false, "Disable response cache")
-	cmd.Flags().BoolVar(&opts.noStream, "no-stream", false, "Collect full response before printing")
+	cmd.Flags().BoolVarP(&opts.noCache, "no-cache", "C", false, "Disable the response cache")
+	cmd.Flags().BoolVarP(&opts.noStream, "no-stream", "S", false, "Collect the full response before printing")
 	cmd.Flags().BoolVarP(&toolsOn, "tools", "T", false, "Force enable read-only tool use")
-	cmd.Flags().BoolVar(&noTools, "no-tools", false, "Disable tool use")
+	cmd.Flags().BoolVarP(&noTools, "no-tools", "N", false, "Disable tool use")
 
 	// Resolve toolMode after flags are parsed.
 	old := cmd.PreRunE
@@ -1299,9 +1266,19 @@ func newPromptCmd() *cobra.Command {
 	var opts promptOpts
 
 	cmd := &cobra.Command{
-		Use:          "ask [flags] [message]",
-		Aliases:      []string{"prompt"},
-		Short:        "Start the interactive REPL (or send a prompt)",
+		Use:     "ask [message]",
+		Aliases: []string{"prompt"},
+		Short:   "Start the REPL or send one prompt; writes session and cache files",
+		Long: "Start the interactive REPL, or send one prompt and print the reply. " +
+			"A bare 'iq MESSAGE' sends one prompt too. Writes session and response-cache files.",
+		Example: "$ iq ask \"explain transformers\"\n" +
+			"$ iq ask -n \"explain transformers\"\n" +
+			"$ iq ask -d \"explain transformers\"\n" +
+			"$ iq ask --cue math \"solve x^2 + 3x - 4\"\n" +
+			"$ iq ask --category code \"write a binary search in Go\"\n" +
+			"$ iq ask --session abc123 \"continue from before\"\n" +
+			"$ iq ask\n" +
+			"$ echo \"translate to French: hello\" | iq ask",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -1331,18 +1308,13 @@ func newPromptCmd() *cobra.Command {
 				input = strings.TrimSpace(string(data))
 			}
 			if input == "" {
-				printPromptHelp()
-				return nil
+				return cmd.Help()
 			}
 
 			_, err := executePrompt(ctx, input, opts, sess)
 			return err
 		},
 	}
-
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printPromptHelp()
-	})
 
 	addPromptFlags(cmd, &opts)
 

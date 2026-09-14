@@ -293,18 +293,18 @@ When tools are enabled, inference takes one of two paths based on how tools were
 
 **Flags:**
 ```
--r, --cue <n>       Skip classification, use this cue directly
--c, --category <n>  Restrict auto-classification to one category
-    --model <id>    Override model directly (must be running)
--s, --session <id>  Load/continue a named session
--K, --no-kb         Disable knowledge base retrieval for this prompt
-    --no-cache      Disable response cache
--T, --tools         Force enable read-only tool use
-    --no-tools      Disable tool use
--n, --dry-run       Trace steps 1–4, skip inference
-    --dump-prompt <f> Write assembled messages as JSON (- for stdout), skip inference
--d, --debug         Trace all steps including inference
-    --no-stream     Collect full response before printing
+-r, --cue NAME          Skip classification, use this cue directly
+-c, --category NAME     Restrict auto-classification to one category
+-m, --model ID          Override model directly (must be running)
+-s, --session ID        Load/continue a named session
+-K, --no-kb             Disable knowledge base retrieval for this prompt
+-C, --no-cache          Disable response cache
+-T, --tools             Force enable read-only tool use
+-N, --no-tools          Disable tool use
+-n, --dry-run           Trace steps 1–4, skip inference
+-D, --dump-prompt FILE  Write assembled messages as JSON (- for stdout), skip inference
+-d, --debug             Trace all steps including inference
+-S, --no-stream         Collect full response before printing
 ```
 
 **REPL mode** — entered when no message arg and stdin is a terminal. Supports `/cue`, `/session`, `/clear`, `/dry-run`, `/debug`, `/tools` (cycles auto → on → off → auto), `/help`, `/quit`. Pipe-friendly: `echo "..." | iq ask` takes the stdin path.
@@ -366,7 +366,7 @@ Benchmark types:
 
 Commands:
 ```
-lm perf bench [--type <type>] [--model <id>] [-v]             # run benchmarks
+lm perf bench [--type <type>] [--model <id>] [-V]             # run benchmarks
 lm perf bench --type cue --models model-a,model-b,model-c     # compare models
 lm perf sweep --models m1,m2 --type infer                     # automated sweep
 lm perf show [model] [type]                                   # display stored results

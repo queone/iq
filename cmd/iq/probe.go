@@ -16,26 +16,6 @@ import (
 	"iq/internal/sidecar"
 )
 
-// ── Help ──────────────────────────────────────────────────────────────────────
-
-func printProbeHelp() {
-	n := programName
-	fmt.Printf("Send a raw message directly to a model sidecar, bypassing the IQ framework.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s pry <model> [flags] <message>\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("FLAGS"))
-	fmt.Printf("  %-30s %s\n", "-c, --cue <name>", "Use a cue's system prompt")
-	fmt.Printf("  %-30s %s\n", "-s, --system <text>", "Use a literal system prompt")
-	fmt.Printf("  %-30s %s\n", "-S, --no-stream", "Collect full response before printing")
-	fmt.Printf("  %-30s %s\n\n", "-k, --kb", "Retrieve knowledge base context for this probe")
-	fmt.Printf("%s\n", color.Whi9("INHERITED FLAGS"))
-	fmt.Printf("  %-30s %s\n\n", "-h, --help", "Show help for command")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s pry mlx-community/SmolLM2-135M-Instruct-8bit \"hello\"\n", n)
-	fmt.Printf("  $ %s pry mlx-community/SmolLM2-135M-Instruct-8bit \"respond in pirate speak\" -s \"You are a pirate.\"\n", n)
-	fmt.Printf("  $ %s pry mlx-community/SmolLM2-135M-Instruct-8bit \"solve x^2 + 3x - 4\" -c math\n", n)
-}
-
 // ── Command ───────────────────────────────────────────────────────────────────
 
 func newProbeCmd() *cobra.Command {
@@ -45,9 +25,14 @@ func newProbeCmd() *cobra.Command {
 	var useKB bool
 
 	cmd := &cobra.Command{
-		Use:          "pry <model> <message>",
-		Aliases:      []string{"probe"},
-		Short:        "Send a raw message directly to a model sidecar",
+		Use:     "pry <model> <message>",
+		Aliases: []string{"probe"},
+		Short:   "Send a raw message directly to a model sidecar",
+		Long: "Send a raw message directly to a model sidecar, bypassing the IQ prompt pipeline. " +
+			"Reads cues and the knowledge base only when asked; writes nothing.",
+		Example: "$ iq pry mlx-community/SmolLM2-135M-Instruct-8bit \"hello\"\n" +
+			"$ iq pry mlx-community/SmolLM2-135M-Instruct-8bit \"respond in pirate speak\" -s \"You are a pirate.\"\n" +
+			"$ iq pry mlx-community/SmolLM2-135M-Instruct-8bit \"solve x^2 + 3x - 4\" -c math",
 		SilenceUsage: true,
 		Args:         argsUsage(cobra.MinimumNArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -164,12 +149,8 @@ func newProbeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printProbeHelp()
-	})
-
-	cmd.Flags().StringVarP(&cueName, "cue", "c", "", "Use a cue's system prompt")
-	cmd.Flags().StringVarP(&system, "system", "s", "", "Use a literal system prompt")
+	cmd.Flags().StringVarP(&cueName, "cue", "c", "", "Use the system prompt of cue `NAME`")
+	cmd.Flags().StringVarP(&system, "system", "s", "", "Use literal system prompt `TEXT`")
 	cmd.Flags().BoolVarP(&noStream, "no-stream", "S", false, "Collect full response before printing")
 	cmd.Flags().BoolVarP(&useKB, "kb", "k", false, "Retrieve knowledge base context for this probe")
 

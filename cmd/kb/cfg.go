@@ -15,15 +15,13 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "config",
 		Aliases:      []string{"cfg"},
-		Short:        "Inspect KB configuration",
+		Short:        "Show the kb configuration",
+		Example:      "$ kb config\n$ kb config show",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigShow()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printConfigHelp()
-	})
 	cmd.AddCommand(newConfigShowCmd())
 	return cmd
 }
@@ -31,24 +29,12 @@ func newConfigCmd() *cobra.Command {
 func newConfigShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "show",
-		Short:        "Show effective KB configuration",
+		Short:        "Show the effective kb configuration",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigShow()
 		},
 	}
-}
-
-func printConfigHelp() {
-	n := programName
-	fmt.Printf("Inspect KB configuration.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s config [command]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-16s %s\n\n", "show", "Show effective configuration (default)")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s config\n", n)
-	fmt.Printf("  $ %s config show\n", n)
 }
 
 // cfgField prints a "  label: value" line.

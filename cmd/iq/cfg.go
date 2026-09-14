@@ -22,14 +22,12 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "config",
 		Aliases: []string{"cfg"},
-		Short:   "Inspect and validate IQ configuration",
+		Short:   "Show and validate the configuration files",
+		Example: "$ iq config\n$ iq config show\n$ iq config validate",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigShow()
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printConfigHelp()
-	})
 	cmd.AddCommand(newConfigShowCmd())
 	cmd.AddCommand(newConfigValidateCmd())
 	return cmd
@@ -56,20 +54,6 @@ func newConfigValidateCmd() *cobra.Command {
 			return runConfigValidate()
 		},
 	}
-}
-
-func printConfigHelp() {
-	n := programName
-	fmt.Printf("Inspect and validate IQ configuration.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s config [command]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("COMMANDS"))
-	fmt.Printf("  %-16s %s\n", "show", "Show effective configuration (default)")
-	fmt.Printf("  %-16s %s\n\n", "validate", "Validate configuration files")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s config\n", n)
-	fmt.Printf("  $ %s config show\n", n)
-	fmt.Printf("  $ %s config validate\n", n)
 }
 
 // ── config show ──────────────────────────────────────────────────────────────

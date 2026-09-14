@@ -7,11 +7,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"iq/internal/color"
+	"iq/internal/usage"
 )
 
 const (
 	programName    = "lm"
-	programVersion = "0.2.0"
+	programVersion = "0.3.0"
+	programURL     = "iq/cmd/lm"
+	programSummary = "Local model manager"
 )
 
 // errSilent is returned when the error has already been printed.
@@ -33,78 +36,62 @@ func argsUsage(v cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
-func printRootHelp() {
-	n := programName
-	fmt.Printf("%s v%s\n", n, programVersion)
-	fmt.Printf("Local model manager.\n\n")
-	fmt.Printf("%s\n", color.Whi9("USAGE"))
-	fmt.Printf("  %s <command> [flags]\n\n", n)
-	fmt.Printf("%s\n", color.Whi9("MODELS"))
-	fmt.Printf("  %-30s %s\n", "search [query|count]", "Search MLX model registry; numeric arg sets result count")
-	fmt.Printf("  %-30s %s\n", "get <model>", "Download a model from the registry")
-	fmt.Printf("  %-30s %s\n", "ls|list", "List models in the local Hugging Face cache")
-	fmt.Printf("  %-30s %s\n", "show <model>", "Show details for a model")
-	fmt.Printf("  %-30s %s\n\n", "rm <model>", "Remove a model")
-	fmt.Printf("%s\n", color.Whi9("BENCHMARKING"))
-	fmt.Printf("  %-30s %s\n\n", "perf [bench|sweep|show|clear]", "Benchmark model performance")
-	fmt.Printf("%s\n", color.Whi9("FLAGS"))
-	fmt.Printf("  %-30s %s\n", "-h, --help", "Show help for command")
-	fmt.Printf("  %-30s %s\n\n", "-v, --version", "An alias for the \"version\" subcommand")
-	fmt.Printf("%s\n", color.Whi9("EXAMPLES"))
-	fmt.Printf("  $ %s search gemma\n", n)
-	fmt.Printf("  $ %s get mlx-community/gemma-3-1b-it-4bit\n", n)
-	fmt.Printf("  $ %s list\n", n)
-	fmt.Printf("  $ %s show mlx-community/gemma-3-1b-it-4bit\n", n)
-	fmt.Printf("  $ %s perf bench --type infer --model mlx-community/gemma-3-1b-it-4bit\n", n)
-}
-
 func newVersionCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:     "version",
 		Aliases: []string{"ver"},
-		Short:   "Show the current lm version",
+		Short:   "Print the lm version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("%s v%s\n", programName, programVersion)
 		},
 	}
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		fmt.Printf("%s v%s\n", programName, programVersion)
-	})
-	return cmd
 }
 
-func runCLI() {
+// newRootCmd wires every lm command under one root whose help pages share one renderer.
+func newRootCmd() *cobra.Command {
+	cobra.EnableCommandSorting = false
 	root := &cobra.Command{
 		Use:          programName,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		Example: "$ lm search gemma\n" +
+			"$ lm get mlx-community/gemma-3-1b-it-4bit\n" +
+			"$ lm list\n" +
+			"$ lm show mlx-community/gemma-3-1b-it-4bit\n" +
+			"$ lm perf bench --type infer --model mlx-community/gemma-3-1b-it-4bit",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if v, _ := cmd.Flags().GetBool("version"); v {
-				fmt.Printf("%s v%s\n", programName, programVersion)
-				return nil
-			}
-			printRootHelp()
-			return nil
+			return cmd.Help()
 		},
 	}
-	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		printRootHelp()
-	})
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.Flags().BoolP("version", "v", false, "An alias for the \"version\" subcommand.")
+	root.SilenceErrors = true
 
 	root.AddCommand(
-		newVersionCmd(),
 		newLmSearchCmd(),
 		newLmGetCmd(),
 		newLmListCmd(),
 		newLmShowCmd(),
 		newLmRmCmd(),
 		newPerfCmd(),
+		newVersionCmd(),
 	)
 
-	root.SilenceErrors = true
+	usage.Install(root, usage.Header{
+		Name:        programName,
+		Version:     programVersion,
+		Description: programSummary,
+		URL:         programURL,
+	})
+	return root
+}
+
+func runCLI() {
+	root := newRootCmd()
+	root.SetArgs(usage.NormalizeArgs(os.Args[1:]))
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, usage.ErrVersionPrinted) {
+			return
+		}
 		if !errors.Is(err, errSilent) {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		}
