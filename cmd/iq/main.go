@@ -15,7 +15,7 @@ import (
 
 const (
 	programName    = "iq"
-	programVersion = "0.19.0"
+	programVersion = "0.19.1"
 	programURL     = "iq"
 	programSummary = "Work with IQ from the command line"
 )
