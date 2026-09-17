@@ -3,6 +3,7 @@
 | Version | Summary |
 |---------|---------|
 | Unreleased | |
+| 0.19.3 | AC24 adopt Govna governance files v0.62.0 |
 | 0.19.2 | AC23: adopt govna v0.61.0 |
 | 0.19.1 | AC22: adopt govna v0.60.0; prep gains README usage-line handling |
 | 0.19.0 | AC21: adopt govna v0.58.0; canon-format help for iq/lm/kb; lm v0.3.0, kb v0.2.0 |
