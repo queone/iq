@@ -3,6 +3,7 @@
 | Version | Summary |
 |---------|---------|
 | Unreleased | |
+| 0.21.0 | Vision guard accepts unified Qwen3.5 checkpoints; Qwen3.5-9B verified in catalog |
 | 0.20.0 | AC28+AC29 iq runs one MLX model via mlx_lm.server for pi; lm and kb removed |
 | 0.19.6 | AC27 adopt Govna governance files v0.71.0 |
 | 0.19.5 | AC26 adopt Govna governance files v0.64.0; remove the CLAUDE.md link |

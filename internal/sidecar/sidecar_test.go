@@ -109,3 +109,46 @@ func TestInferArgsWithTemplateArgs(t *testing.T) {
 		t.Fatalf("InferArgs = %q, want %q", got, want)
 	}
 }
+
+// ── IsVisionModel ─────────────────────────────────────────────────────────────
+
+func writeModelConfig(t *testing.T, cfg string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestIsVisionModelAcceptsUnifiedTextConfig(t *testing.T) {
+	dir := writeModelConfig(t, `{"model_type":"qwen3_5","text_config":{"hidden_size":1},"vision_config":{"depth":1}}`)
+	if IsVisionModel(dir) {
+		t.Error("a unified checkpoint with text_config must not be refused")
+	}
+}
+
+func TestIsVisionModelRefusesKnownTypesAndVisionOnlyKeys(t *testing.T) {
+	cases := map[string]string{
+		"known type with text_config": `{"model_type":"llava","text_config":{},"vision_config":{}}`,
+		"vision keys, no text_config": `{"model_type":"qwen2_5_vl","vision_config":{}}`,
+		"vision tower only":           `{"model_type":"custom","vision_tower":"clip"}`,
+	}
+	for name, cfg := range cases {
+		if !IsVisionModel(writeModelConfig(t, cfg)) {
+			t.Errorf("%s: expected refusal", name)
+		}
+	}
+}
+
+func TestIsVisionModelAcceptsPlainTextAndUnreadableConfigs(t *testing.T) {
+	if IsVisionModel(writeModelConfig(t, `{"model_type":"qwen3","hidden_size":1}`)) {
+		t.Error("plain text model refused")
+	}
+	if IsVisionModel(t.TempDir()) {
+		t.Error("missing config.json must defer to mlx_lm")
+	}
+	if IsVisionModel(writeModelConfig(t, `{not json`)) {
+		t.Error("unparsable config.json must defer to mlx_lm")
+	}
+}

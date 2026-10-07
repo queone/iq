@@ -50,21 +50,30 @@ func TestPickErrorNamesSmallestRequirement(t *testing.T) {
 	}
 }
 
-func TestCatalogParsesWithOneVerifiedSeed(t *testing.T) {
+func TestCatalogParsesWithVerifiedQwen35Entries(t *testing.T) {
 	entries, err := Catalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entries[0].ID != "mlx-community/Qwen3.5-4B-OptiQ-4bit" || !entries[0].Verified {
-		t.Errorf("first entry = %+v, want the verified Qwen3.5-4B seed", entries[0])
-	}
-	if entries[0].ChatTemplateArgs["enable_thinking"] != false {
-		t.Errorf("seed should disable thinking: %v", entries[0].ChatTemplateArgs)
-	}
-	for _, e := range entries[1:] {
-		if e.Verified {
-			t.Errorf("%s is marked verified without an AT8 run", e.ID)
+	verified := map[string]bool{}
+	for i, e := range entries {
+		if i > 0 && e.DiskGB < entries[i-1].DiskGB {
+			t.Errorf("catalog not sorted by disk_gb at %s", e.ID)
 		}
+		if e.Verified {
+			verified[e.ID] = true
+			if e.ChatTemplateArgs["enable_thinking"] != false {
+				t.Errorf("%s: verified Qwen3.5 entries must disable thinking: %v", e.ID, e.ChatTemplateArgs)
+			}
+		}
+	}
+	for _, want := range []string{"mlx-community/Qwen3.5-4B-OptiQ-4bit", "mlx-community/Qwen3.5-9B-OptiQ-4bit"} {
+		if !verified[want] {
+			t.Errorf("%s should be verified", want)
+		}
+	}
+	if len(verified) != 2 {
+		t.Errorf("verified entries = %v, want exactly the two probed models", verified)
 	}
 }
 

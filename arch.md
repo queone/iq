@@ -76,7 +76,7 @@ Fit rule: budget = 70% of memory; estimate = `disk_gb × 1.15 + 2 GB` for weight
 Start sequence:
 1. Resolve the model: argument, else `config.yaml`, else pick and save
 2. Resolve the Hugging Face snapshot directory; run `hf download <id>` when it is missing
-3. **VLM guard** — reject vision-language models by inspecting `config.json`; `mlx_lm.server` cannot serve them
+3. **VLM guard** — refuse known vision-language model types by inspecting `config.json`; a unified checkpoint that carries a `text_config`, such as Qwen3.5, passes because mlx-lm serves its text model and ignores `vision_config`
 4. Allocate the next free port from 27001+
 5. Spawn the detached subprocess (`Setsid: true`) with `--chat-template-args` when configured
 6. Poll `GET /v1/models` until 200 OK or a 120-second timeout; a goroutine on `cmd.Wait()` detects early crashes

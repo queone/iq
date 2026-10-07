@@ -303,7 +303,14 @@ func MlxVenvPython() (string, error) {
 	return "", fmt.Errorf("no python3/python found in the mlx_lm venv (%s)", binDir)
 }
 
-// IsVisionModel checks a model's config.json for vision-language model indicators.
+// vlmTypes lists model_type values that mlx_lm.server cannot serve.
+var vlmTypes = []string{"qwen2_5_vl", "qwen2_vl", "llava", "idefics", "paligemma", "mllama"}
+
+// IsVisionModel reports whether a model's config.json describes a checkpoint
+// that mlx_lm.server cannot serve. Known vision-language model types are
+// refused. A unified checkpoint that carries a text_config, such as Qwen3.5,
+// is accepted because mlx-lm loads its text model and ignores vision_config.
+// Otherwise the presence of vision-only keys marks a vision model.
 func IsVisionModel(modelPath string) bool {
 	data, err := os.ReadFile(filepath.Join(modelPath, "config.json"))
 	if err != nil {
@@ -313,16 +320,14 @@ func IsVisionModel(modelPath string) bool {
 	if json.Unmarshal(data, &cfg) != nil {
 		return false
 	}
-	// Check for known VLM indicators in top-level keys.
+	if mt, ok := cfg["model_type"].(string); ok && slices.Contains(vlmTypes, mt) {
+		return true
+	}
+	if _, ok := cfg["text_config"]; ok {
+		return false
+	}
 	for _, key := range []string{"vision_config", "visual", "vision_tower", "image_size"} {
 		if _, ok := cfg[key]; ok {
-			return true
-		}
-	}
-	// Check model_type for known VLM types.
-	if mt, ok := cfg["model_type"].(string); ok {
-		vlmTypes := []string{"qwen2_5_vl", "qwen2_vl", "llava", "idefics", "paligemma", "mllama"}
-		if slices.Contains(vlmTypes, mt) {
 			return true
 		}
 	}

@@ -1,6 +1,7 @@
 # Curated MLX models for `iq pick`. Keep entries sorted by disk_gb.
-# verified: true only after AC29 AT8 passes on this machine: structured tool
-# calls under mlx_lm.server and no end-of-sequence leak in plain replies.
+# verified: true only after the catalog verification run in arch.md passes on a
+# real machine: structured tool calls under mlx_lm.server and no end-of-sequence
+# leak in plain replies.
 entries:
   - id: mlx-community/Qwen3.5-4B-OptiQ-4bit
     disk_gb: 2.8
@@ -8,12 +9,12 @@ entries:
     chat_template_args: {enable_thinking: false}
     verified: true
     notes: Verified 2026-10-06 under mlx_lm.server 0.30.7 with thinking disabled.
-  - id: mlx-community/Qwen3.5-9B-MLX-4bit
-    disk_gb: 5.7
+  - id: mlx-community/Qwen3.5-9B-OptiQ-4bit
+    disk_gb: 8.2
     context_window: 32768
     chat_template_args: {enable_thinking: false}
-    verified: false
-    notes: Hub tags it image-text-to-text; check the vision guard and tool calls before marking verified.
+    verified: true
+    notes: Verified 2026-10-06 under mlx_lm.server 0.30.7; 7.3 GB resident, about 37 tok/s on an M4 Pro.
   - id: lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit
     disk_gb: 16.4
     context_window: 32768
