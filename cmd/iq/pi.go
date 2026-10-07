@@ -116,14 +116,56 @@ func mergePiProvider(path string, entry map[string]any) error {
 	return nil
 }
 
+// piSettingsPath returns pi's settings.json, which lives beside its models.json.
+func piSettingsPath(modelsPath string) string {
+	return filepath.Join(filepath.Dir(modelsPath), "settings.json")
+}
+
+// setPiDefault makes iq/default_model pi's startup model by writing
+// defaultProvider and defaultModel into the settings file at path, creating
+// the file when absent and keeping every other key.
+func setPiDefault(path string) error {
+	root := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if len(bytes.TrimSpace(data)) > 0 {
+			if err := json.Unmarshal(data, &root); err != nil {
+				return fmt.Errorf("cannot parse %s: %w", path, err)
+			}
+		}
+	case errors.Is(err, os.ErrNotExist):
+		// First write — start from an empty document.
+	default:
+		return fmt.Errorf("cannot read %s: %w", path, err)
+	}
+	root["defaultProvider"], _ = json.Marshal(piProviderKey)
+	root["defaultModel"], _ = json.Marshal(piModelID)
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0644); err != nil {
+		return fmt.Errorf("cannot write %s: %w", path, err)
+	}
+	return nil
+}
+
 // runPi prints the provider entry for the running sidecar, or merges it into
-// the pi config file when write is set. An empty path means pi's default file.
-func runPi(states []*sidecar.State, cfg *config.Config, write bool, path string, out io.Writer) error {
+// the pi config file when write is set. setDefault also makes iq/default_model
+// pi's startup model and implies write. An empty path means pi's default file.
+func runPi(states []*sidecar.State, cfg *config.Config, write, setDefault bool, path string, out io.Writer) error {
 	state, err := selectInferState(states)
 	if err != nil {
 		return err
 	}
 	entry := piProvider(state, cfg)
+	if setDefault {
+		write = true
+	}
 	if !write {
 		doc := map[string]any{"providers": map[string]any{piProviderKey: entry}}
 		b, err := json.MarshalIndent(doc, "", "  ")
@@ -142,16 +184,23 @@ func runPi(states []*sidecar.State, cfg *config.Config, write bool, path string,
 		return err
 	}
 	fmt.Fprintf(out, "wrote provider %q for %s (%s) to %s\n", piProviderKey, state.Model, sidecar.Endpoint(state.Port), path)
+	if setDefault {
+		settings := piSettingsPath(path)
+		if err := setPiDefault(settings); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "set pi's startup model to %s/%s in %s\n", piProviderKey, piModelID, settings)
+	}
 	return nil
 }
 
 // newPiCmd returns the `iq pi` command.
 func newPiCmd() *cobra.Command {
-	var write bool
+	var write, setDefault bool
 	var file string
 	cmd := &cobra.Command{
 		Use:          "pi",
-		Short:        "Print pi's provider entry for the running sidecar; -w writes ~/.pi/agent/models.json",
+		Short:        "Print pi's provider entry for the running sidecar; -w writes ~/.pi/agent/models.json, -d also makes it pi's default",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -163,10 +212,11 @@ func newPiCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runPi(states, cfg, write, file, cmd.OutOrStdout())
+			return runPi(states, cfg, write, setDefault, file, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().BoolVarP(&write, "write", "w", false, "Merge the entry into pi's models.json instead of printing it")
+	cmd.Flags().BoolVarP(&setDefault, "default", "d", false, "Also set pi's startup model to iq/default_model in settings.json (implies -w)")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Target file for -w (default ~/.pi/agent/models.json)")
 	return cmd
 }

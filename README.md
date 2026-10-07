@@ -41,8 +41,8 @@ Builds and installs one binary, `iq`, into `$GOPATH/bin`.
 iq doc                           # check python3, mlx_lm.server and its flags, hf, and the model
 iq pick -w                       # choose the largest verified catalog model that fits this machine
 iq start                         # download if needed, then run it as an mlx_lm.server sidecar
-iq pi -w                         # write the `iq` provider into ~/.pi/agent/models.json
-pi --model iq/default_model      # use it from pi
+iq pi -w -d                      # write the `iq` provider into ~/.pi/agent/models.json and make it pi's default
+pi                               # pi now starts on iq/default_model; or pass --model iq/default_model
 iq stop                          # stop the sidecar
 ```
 
@@ -71,7 +71,7 @@ iq start      — start the model's mlx_lm.server sidecar, downloading the model
 iq stop       — stop the sidecar and sweep orphaned servers
 iq restart    — stop then start
 iq status     — show running sidecars and memory use
-iq pi         — print pi's provider entry for the running sidecar (-w writes ~/.pi/agent/models.json)
+iq pi         — print pi's provider entry for the running sidecar (-w writes ~/.pi/agent/models.json, -d also sets pi's default)
 iq config     — show or validate config.yaml
 ```
 

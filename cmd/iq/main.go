@@ -13,7 +13,7 @@ import (
 
 const (
 	programName    = "iq"
-	programVersion = "0.21.0"
+	programVersion = "0.22.0"
 	programURL     = "iq"
 	programSummary = "Run one local MLX model for pi"
 )

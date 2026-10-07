@@ -155,7 +155,7 @@ func TestMergePiProviderCreatesMissingFileAndDirectory(t *testing.T) {
 func TestRunPiPrintsEntryByDefault(t *testing.T) {
 	var out bytes.Buffer
 	states := []*sidecar.State{inferState("org/model", 27001)}
-	if err := runPi(states, &config.Config{}, false, "", &out); err != nil {
+	if err := runPi(states, &config.Config{}, false, false, "", &out); err != nil {
 		t.Fatalf("runPi: %v", err)
 	}
 	var doc map[string]map[string]map[string]any
@@ -174,7 +174,7 @@ func TestRunPiWithTwoSidecarsLeavesFileUntouched(t *testing.T) {
 	}
 	states := []*sidecar.State{inferState("org/a", 27001), inferState("org/b", 27002)}
 	var out bytes.Buffer
-	err := runPi(states, &config.Config{}, true, path, &out)
+	err := runPi(states, &config.Config{}, true, false, path, &out)
 	if err == nil || !strings.Contains(err.Error(), "stop all but one") {
 		t.Fatalf("err = %v, want the stop-all-but-one message", err)
 	}
@@ -186,7 +186,7 @@ func TestRunPiWithTwoSidecarsLeavesFileUntouched(t *testing.T) {
 
 func TestRunPiWithNoSidecarHintsStart(t *testing.T) {
 	var out bytes.Buffer
-	err := runPi(nil, &config.Config{}, true, filepath.Join(t.TempDir(), "models.json"), &out)
+	err := runPi(nil, &config.Config{}, true, false, filepath.Join(t.TempDir(), "models.json"), &out)
 	if err == nil || !strings.Contains(err.Error(), "iq start") {
 		t.Fatalf("err = %v, want the iq start hint", err)
 	}
@@ -205,5 +205,59 @@ func TestMergePiProviderRejectsMalformedFile(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != bad {
 		t.Errorf("malformed file was modified")
+	}
+}
+
+// ── -d / --default ────────────────────────────────────────────────────────────
+
+func TestSetPiDefaultKeepsOtherKeysAndCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "agent", "settings.json")
+	if err := setPiDefault(settings); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"lastChangelogVersion":"1.0.4","defaultModel":"old/x"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setPiDefault(settings); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	var got map[string]any
+	data, _ := os.ReadFile(settings)
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["defaultProvider"] != "iq" || got["defaultModel"] != "default_model" || got["lastChangelogVersion"] != "1.0.4" {
+		t.Errorf("settings = %v", got)
+	}
+}
+
+func TestSetPiDefaultRejectsMalformedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("{nope"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setPiDefault(path); err == nil || !strings.Contains(err.Error(), "cannot parse") {
+		t.Fatalf("err = %v, want a cannot-parse error", err)
+	}
+}
+
+func TestRunPiDefaultImpliesWriteAndTargetsSiblingSettings(t *testing.T) {
+	dir := t.TempDir()
+	models := filepath.Join(dir, "models.json")
+	var out bytes.Buffer
+	states := []*sidecar.State{inferState("org/model", 27001)}
+	if err := runPi(states, &config.Config{}, false, true, models, &out); err != nil {
+		t.Fatalf("runPi: %v", err)
+	}
+	if _, providers := readProviders(t, models); len(providers) != 1 {
+		t.Errorf("-d must imply -w; providers = %v", providers)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("settings.json not written beside models.json: %v", err)
+	}
+	if !strings.Contains(string(data), `"defaultProvider": "iq"`) || !strings.Contains(out.String(), "startup model") {
+		t.Errorf("settings = %s\noutput = %s", data, out.String())
 	}
 }
