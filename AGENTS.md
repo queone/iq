@@ -582,8 +582,12 @@ Note: the Director triggers those actions; Ratify names what is pending.
 
 ## Project Rules
 
-- **Multi-utility repo.** This repo builds three installable binaries from `cmd/iq/`, `cmd/lm/`, `cmd/kb/`. `./build.sh` validates and installs all three binaries.
-- **Per-utility programVersion.** Each `cmd/<name>/main.go` declares its own `programVersion` const. `./build.sh prep` treats `cmd/iq` as primary (module basename match) and bumps only its `programVersion`; `cmd/kb` and `cmd/lm` are secondary and skipped. Bump secondary binary versions manually in their own ACs.
+- Build one binary, iq, from cmd/iq/ with ./build.sh.
+- Declare programVersion once in cmd/iq/main.go.
+- Let ./build.sh prep bump programVersion.
 - **Semver decision test.** Would a user notice the change in `iq --help`, `iq cfg show`, or `iq start`? Yes → MINOR (reset PATCH to 0). No → PATCH. Batch several PATCH fixes into one release. MAJOR not until a stable public API commitment.
-- **External runtime deps.** iq depends on Apple Silicon, Python `mlx-lm` (via pipx), the `hf` CLI, and `mlx-embedding-models` injected into the `mlx-lm` venv. Verify with `iq doc`. iq is offline-first — do not introduce code paths that assume cloud LLM availability.
+- Depend only on Apple Silicon, Python mlx-lm 0.30.7 or newer via pipx, and the hf CLI.
+- Verify runtime dependencies with iq doc.
+- Keep iq offline after model download.
+- Add no code path that assumes cloud LLM availability.
 - Follow existing repo patterns unless an approved improvement says otherwise.

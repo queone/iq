@@ -2,7 +2,6 @@ package sidecar
 
 import (
 	"bufio"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,9 +18,6 @@ import (
 
 	"iq/internal/config"
 )
-
-//go:embed infer_server.py
-var InferServerPy string
 
 // ── Sidecar constants ─────────────────────────────────────────────────────────
 
@@ -194,37 +190,6 @@ func NextAvailablePort() (int, error) {
 	return 0, fmt.Errorf("no available ports in range %d–%d", PortBase, PortBase+100)
 }
 
-// PickSidecar returns a live sidecar for the given tier.
-// If preferSmallest is true and diskUsage is provided, returns the smallest.
-func PickSidecar(tier string, preferSmallest bool, diskUsage func(string) int64) (*State, error) {
-	live, err := AllLiveStates()
-	if err != nil {
-		return nil, err
-	}
-	var candidates []*State
-	for _, s := range live {
-		if s.Tier == tier {
-			candidates = append(candidates, s)
-		}
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no running sidecar for %q — run 'iq start %s'", tier, tier)
-	}
-	if preferSmallest && len(candidates) > 1 && diskUsage != nil {
-		best := candidates[0]
-		bestDisk := diskUsage(best.Model)
-		for _, c := range candidates[1:] {
-			d := diskUsage(c.Model)
-			if d > 0 && (bestDisk == 0 || d < bestDisk) {
-				best = c
-				bestDisk = d
-			}
-		}
-		return best, nil
-	}
-	return candidates[0], nil
-}
-
 // ── Process helpers ──────────────────────────────────────────────────────────
 
 // PidAlive checks whether a process is still running.
@@ -294,6 +259,50 @@ func PrintLastLogLines(logFile string, n int) {
 	fmt.Fprintln(os.Stderr)
 }
 
+// ── mlx-lm venv discovery ─────────────────────────────────────────────────────
+
+// MlxServerPath locates the mlx_lm.server console script installed by pipx.
+func MlxServerPath() (string, error) {
+	if p, err := exec.LookPath("mlx_lm.server"); err == nil {
+		return p, nil
+	}
+	// exec.LookPath does not expand ~ in PATH entries; check well-known locations.
+	var candidates []string
+	if pipxHome := os.Getenv("PIPX_HOME"); pipxHome != "" {
+		candidates = append(candidates, filepath.Join(pipxHome, "venvs", "mlx-lm", "bin", "mlx_lm.server"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".local", "bin", "mlx_lm.server"))
+	}
+	candidates = append(candidates, "/opt/homebrew/bin/mlx_lm.server")
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("mlx_lm.server not found on PATH — run: pipx install mlx-lm")
+}
+
+// MlxVenvPython locates the Python interpreter in the same venv as mlx_lm.server.
+func MlxVenvPython() (string, error) {
+	serverPath, err := MlxServerPath()
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(serverPath)
+	if err != nil {
+		real = serverPath
+	}
+	binDir := filepath.Dir(real)
+	for _, name := range []string{"python3", "python"} {
+		candidate := filepath.Join(binDir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no python3/python found in the mlx_lm venv (%s)", binDir)
+}
+
 // IsVisionModel checks a model's config.json for vision-language model indicators.
 func IsVisionModel(modelPath string) bool {
 	data, err := os.ReadFile(filepath.Join(modelPath, "config.json"))
@@ -320,8 +329,20 @@ func IsVisionModel(modelPath string) bool {
 	return false
 }
 
-// StartInfer spawns infer_server.py for the given model.
-// modelPath and pythonPath must be pre-resolved by the caller.
+// InferArgs builds the argument list that launches mlx_lm.server through the
+// mlx-lm venv Python for one model: `python -m mlx_lm server --model ... --port ...`.
+// templateArgs is compact JSON for --chat-template-args, or "" to omit the flag.
+func InferArgs(modelPath string, port int, templateArgs string) []string {
+	args := []string{"-m", "mlx_lm", "server", "--model", modelPath, "--port", strconv.Itoa(port), "--host", "127.0.0.1"}
+	if templateArgs != "" {
+		args = append(args, "--chat-template-args", templateArgs)
+	}
+	return args
+}
+
+// StartInfer launches mlx_lm.server for the given model through the mlx-lm venv
+// Python. modelPath and pythonPath must be pre-resolved by the caller. Per-model
+// chat template arguments come from config.yaml (chat_template_args).
 // Returns the State on success (the caller may want to register in manifest, etc.).
 func StartInfer(modelID, modelPath, pythonPath string) (*State, error) {
 	port, err := NextAvailablePort()
@@ -344,25 +365,13 @@ func StartInfer(modelID, modelPath, pythonPath string) (*State, error) {
 		return nil, fmt.Errorf("model %s is a vision-language model (VLM) — IQ only supports text-only models", modelID)
 	}
 
-	// Write embedded script to config dir. If a dev override already exists
-	// there, skip the write so local edits survive without a Go rebuild.
-	cfgDir, err := config.Dir()
+	// Per-model chat template arguments (e.g. enable_thinking: false for Qwen3.5).
+	cfg, err := config.Load()
 	if err != nil {
 		lf.Close()
-		return nil, err
+		return nil, fmt.Errorf("cannot load config for chat_template_args: %w", err)
 	}
-	scriptPath := filepath.Join(cfgDir, "infer_server.py")
-	if existing, err := os.ReadFile(scriptPath); err != nil || string(existing) == InferServerPy {
-		// Missing or identical to embedded — write (or refresh) the embedded copy.
-		if err := os.WriteFile(scriptPath, []byte(InferServerPy), 0755); err != nil {
-			lf.Close()
-			return nil, fmt.Errorf("failed to write infer script: %w", err)
-		}
-	} else {
-		fi, _ := os.Stat(scriptPath)
-		fmt.Fprintf(os.Stderr, "  %s\n", color.Yel5(fmt.Sprintf("using %s (%s)", scriptPath, fi.ModTime().Format("2006-01-02 15:04"))))
-	}
-	cmd := exec.Command(pythonPath, scriptPath, "--model", modelPath, "--port", strconv.Itoa(port))
+	cmd := exec.Command(pythonPath, InferArgs(modelPath, port, cfg.ChatTemplateArgsJSON(modelID))...)
 	cmd.Env = os.Environ()
 	cmd.Stdout = lf
 	cmd.Stderr = lf
@@ -461,7 +470,7 @@ func Stop(modelID string) error {
 
 // KillOrphanSidecars finds and kills stale sidecar processes on IQ-managed ports.
 func KillOrphanSidecars() {
-	patterns := []string{"infer_server.py", "mlx_lm.server", "embed_server.py"}
+	patterns := []string{"infer_server.py", "mlx_lm.server", "mlx_lm server", "embed_server.py"}
 	for _, pattern := range patterns {
 		out, err := exec.Command("pgrep", "-f", pattern).Output()
 		if err != nil {

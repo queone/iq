@@ -3,360 +3,95 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-	"iq/internal/cache"
+
 	"iq/internal/color"
 	"iq/internal/config"
-	"iq/internal/cue"
-	"iq/internal/embed"
-	"iq/internal/kb"
-	"iq/internal/sidecar"
-	"iq/internal/tools"
+	"iq/internal/model"
 )
 
 // newConfigCmd returns the `iq config` command with show and validate subcommands.
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "config",
-		Aliases: []string{"cfg"},
-		Short:   "Show and validate the configuration files",
-		Example: "$ iq config\n$ iq config show\n$ iq config validate",
+		Use:          "config",
+		Aliases:      []string{"cfg"},
+		Short:        "Show and validate config.yaml",
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigShow()
 		},
 	}
-	cmd.AddCommand(newConfigShowCmd())
-	cmd.AddCommand(newConfigValidateCmd())
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:          "show",
+			Short:        "Show the effective configuration",
+			SilenceUsage: true,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runConfigShow()
+			},
+		},
+		&cobra.Command{
+			Use:          "validate",
+			Short:        "Validate config.yaml and the configured model",
+			SilenceUsage: true,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runConfigValidate()
+			},
+		},
+	)
 	return cmd
 }
 
-func newConfigShowCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "show",
-		Short:        "Show effective configuration",
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConfigShow()
-		},
-	}
-}
-
-func newConfigValidateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "validate",
-		Aliases:      []string{"check"},
-		Short:        "Validate configuration files",
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConfigValidate()
-		},
-	}
-}
-
-// ── config show ──────────────────────────────────────────────────────────────
-
+// runConfigShow prints the effective configuration as YAML. It never writes.
 func runConfigShow() error {
-	cfg, err := config.Load(nil)
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-
-	// ── config.yaml ──
-	fmt.Printf("%s\n", color.Whi9("CONFIG"))
-	cfgField("path", cfgPathStr())
-	cfgField("schema_version", fmt.Sprintf("v%d", cfg.Version))
-
-	// Print in config.yaml order: global params, tiers (with resolved params), then extras.
-	gp := config.ResolveInferParams(cfg, "")
-	cfgField("repetition_penalty", fmt.Sprintf("%.1f", gp.RepetitionPenalty))
-	cfgField("temperature", fmt.Sprintf("%.1f", gp.Temperature))
-	cfgField("max_tokens", fmt.Sprintf("%d", gp.MaxTokens))
-	cfgField("top_p", fmtOptF(gp.TopP, false, "1.0  (mlx_lm default)", "%.2f"))
-	cfgField("min_p", fmtOptF(gp.MinP, false, "0.0  (mlx_lm default)", "%.2f"))
-	cfgField("top_k", fmtOptI(gp.TopK, false, "0  (mlx_lm default)"))
-	cfgField("stop", fmtStop(gp.Stop, false))
-	cfgField("seed", fmtOptI(gp.Seed, false, "—  (random)"))
-	fmt.Println()
-
-	// Pool — flat list of inference models with per-model param overrides.
-	cfgField("models:", "")
-	poolModels := cfg.AllModels()
-	if len(poolModels) == 0 {
-		cfgField("  (empty)", "")
+	path, _ := config.Path()
+	fmt.Printf("# %s (schema v%d)\n", path, config.ConfigVersion)
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
 	}
-	for _, m := range poolModels {
-		cfgField(fmt.Sprintf("  - %s", m), "")
-		// Show effective inference params for this model.
-		rp := config.ResolveInferParams(cfg, m)
-		me := cfg.ModelEntryFor(m)
-		if me != nil && me.ContextWindow > 0 {
-			cfgField("    context_window", fmt.Sprintf("%d  (model override)", me.ContextWindow))
-		}
-		cfgField("    repetition_penalty", fmtParam(rp.RepetitionPenalty, me != nil && me.RepetitionPenalty != nil, "%.1f"))
-		cfgField("    temperature", fmtParam(rp.Temperature, me != nil && me.Temperature != nil, "%.1f"))
-		cfgField("    max_tokens", fmtParamInt(rp.MaxTokens, me != nil && me.MaxTokens != nil))
-		cfgField("    top_p", fmtOptF(rp.TopP, me != nil && me.TopP != nil, "1.0  (mlx_lm default)", "%.2f"))
-		cfgField("    min_p", fmtOptF(rp.MinP, me != nil && me.MinP != nil, "0.0  (mlx_lm default)", "%.2f"))
-		cfgField("    top_k", fmtOptI(rp.TopK, me != nil && me.TopK != nil, "0  (mlx_lm default)"))
-		cfgField("    stop", fmtStop(rp.Stop, me != nil && len(me.Stop) > 0))
-		cfgField("    seed", fmtOptI(rp.Seed, me != nil && me.Seed != nil, "—  (random)"))
-	}
-	fmt.Println()
-
-	cfgField("embed_model", config.EmbedModel(cfg))
-	if cfg.BraveAPIKey != "" {
-		masked := cfg.BraveAPIKey[:4] + strings.Repeat("*", len(cfg.BraveAPIKey)-4)
-		cfgField("brave_api_key", masked)
-	} else {
-		cfgField("brave_api_key", "(not set)")
-	}
-
-	if len(cfg.ToolPaths) > 0 {
-		cfgField("tool_paths", strings.Join(cfg.ToolPaths, ", "))
-	} else {
-		cfgField("tool_paths", "(none)")
-	}
-
-	// ── Cues ──
-	cfgSection("CUES")
-	cuePath, _ := cue.Path()
-	cfgField("path", cuePath)
-	cues, cueErr := cue.Load()
-	if cueErr != nil {
-		cfgField("status", fmt.Sprintf("error: %s", cueErr))
-	} else {
-		cfgField("count", fmt.Sprintf("%d", len(cues)))
-		cats := map[string]int{}
-		for _, c := range cues {
-			cats[c.Category]++
-		}
-		var catParts []string
-		for cat, n := range cats {
-			catParts = append(catParts, fmt.Sprintf("%s(%d)", cat, n))
-		}
-		cfgField("categories", strings.Join(catParts, " "))
-	}
-
-	// ── Knowledge base ──
-	cfgSection("KNOWLEDGE BASE")
-	if kb.Exists() {
-		idx, kbErr := kb.Load()
-		if kbErr != nil {
-			cfgField("status", fmt.Sprintf("error: %s", kbErr))
-		} else {
-			cfgField("sources", fmt.Sprintf("%d", len(idx.Sources)))
-			cfgField("chunks", fmt.Sprintf("%d", len(idx.Chunks)))
-		}
-	} else {
-		cfgField("status", "(not initialized)")
-	}
-
-	// ── Thresholds & constants ──
-	cfgSection("THRESHOLDS")
-	cfgField("cue_classify_min", fmt.Sprintf("%.2f", embed.ClassifyMinScore))
-	cfgField("keyword_boost", fmt.Sprintf("%.2f", embed.KeywordBoostConst))
-	cfgField("tool_classify_min", fmt.Sprintf("%.2f", tools.ClassifyMinScore))
-	cfgField("kb_min_score", fmt.Sprintf("%.2f", config.KBMinScore(cfg)))
-	cfgField("kb_top_k", fmt.Sprintf("%d", kb.DefaultK))
-
-	cfgSection("RUNTIME")
-	cfgField("embed_port", fmt.Sprintf("%d", embed.PortConst))
-	cfgField("sidecar_port_base", fmt.Sprintf("%d", sidecar.PortBase))
-	cfgField("sidecar_ready_timeout", sidecar.ReadyTimeout.String())
-	cfgField("embed_ready_timeout", embed.ReadyTimeout.String())
-	cfgField("tool_exec_timeout", tools.ExecuteTimeout.String())
-	cfgField("tool_max_output", fmt.Sprintf("%d bytes", tools.MaxOutputBytes))
-	cfgField("cache_ttl", cache.TTL.String())
-	cfgField("tools_registered", fmt.Sprintf("%d", len(tools.NewRegistry())))
-	cfgField("tool_signals", fmt.Sprintf("%d", len(tools.Signals)))
-
+	fmt.Print(string(data))
 	return nil
 }
 
-func cfgPathStr() string {
-	p, _ := config.Path()
-	return p
-}
-
-func cfgSection(name string) {
-	fmt.Printf("\n%s\n", color.Whi9(name))
-}
-
-func cfgField(label, value string) {
-	fmt.Printf("  %-24s %s\n", label, value)
-}
-
-// fmtParam formats a float64 param, annotating whether it's a tier override.
-func fmtParam(effective float64, isOverride bool, verb string) string {
-	val := fmt.Sprintf(verb, effective)
-	if isOverride {
-		return val + "  (model override)"
-	}
-	return val
-}
-
-// fmtParamInt formats an int param, annotating whether it's a tier override.
-func fmtParamInt(effective int, isOverride bool) string {
-	val := fmt.Sprintf("%d", effective)
-	if isOverride {
-		return val + "  (model override)"
-	}
-	return val
-}
-
-// fmtOptF formats an optional *float64. nilLabel is shown when the pointer is
-// nil (e.g. "1.0  (mlx_lm default)"). isOverride annotates tier-level overrides.
-func fmtOptF(p *float64, isOverride bool, nilLabel, verb string) string {
-	if p == nil {
-		return nilLabel
-	}
-	val := fmt.Sprintf(verb, *p)
-	if isOverride {
-		return val + "  (model override)"
-	}
-	return val
-}
-
-// fmtOptI formats an optional *int. nilLabel is shown when the pointer is nil.
-func fmtOptI(p *int, isOverride bool, nilLabel string) string {
-	if p == nil {
-		return nilLabel
-	}
-	val := fmt.Sprintf("%d", *p)
-	if isOverride {
-		return val + "  (model override)"
-	}
-	return val
-}
-
-// fmtStop formats a stop sequence list. Empty slice renders as "—".
-func fmtStop(stop []string, isOverride bool) string {
-	if len(stop) == 0 {
-		return "—"
-	}
-	val := strings.Join(stop, ", ")
-	if isOverride {
-		return val + "  (model override)"
-	}
-	return val
-}
-
-// ── config validate ──────────────────────────────────────────────────────────
-
+// runConfigValidate loads the file, reports what iq will run, and warns about
+// gaps. It never writes.
 func runConfigValidate() error {
-	var warnings, errors []string
-	warn := func(msg string) { warnings = append(warnings, msg) }
-	fail := func(msg string) { errors = append(errors, msg) }
-
-	// ── config.yaml ──
-	cfgPath, err := config.Path()
+	path, _ := config.Path()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		fmt.Println(color.Yel5("config.yaml does not exist — run: iq pick -w"))
+		return nil
+	}
+	cfg, err := loadConfig()
 	if err != nil {
-		fail("cannot resolve config path: " + err.Error())
+		return err
+	}
+	fmt.Printf("%-20s %s\n", "schema", fmt.Sprintf("v%d", config.ConfigVersion))
+	if cfg.Model == "" {
+		fmt.Println(color.Yel5("model not set — run: iq pick -w"))
+		return nil
+	}
+	fmt.Printf("%-20s %s\n", "model", cfg.Model)
+	if snap, err := model.SnapshotDir(cfg.Model); err == nil {
+		fmt.Printf("%-20s %s\n", "snapshot", snap)
 	} else {
-		data, err := os.ReadFile(cfgPath)
-		if os.IsNotExist(err) {
-			warn("config.yaml does not exist (will use defaults)")
-		} else if err != nil {
-			fail("cannot read config.yaml: " + err.Error())
-		} else {
-			var probe map[string]any
-			if err := yaml.Unmarshal(data, &probe); err != nil {
-				fail("config.yaml parse error: " + err.Error())
-			}
-		}
+		fmt.Printf("%-20s %s\n", "snapshot", color.Yel5("not in the Hugging Face cache — iq start downloads it"))
 	}
-
-	cfg, err := config.Load(nil)
-	if err != nil {
-		fail("config load error: " + err.Error())
-	} else {
-		// Check pool has models.
-		if len(cfg.AllModels()) == 0 {
-			warn("no models in pool — run: iq pool add <model>")
-		}
-
-		// Check embed model.
-		if cfg.EmbedModel == "" {
-			warn("embed_model not set (using default: " + config.DefaultEmbedModel + ")")
-		}
-
-		// Check deprecated fields.
-		if cfg.CueModel != "" {
-			warn("deprecated field cue_model found — should auto-migrate to embed_model")
-		}
-		if cfg.KbModel != "" {
-			warn("deprecated field kb_model found — should auto-migrate to embed_model")
-		}
-
-		// Check tool_paths exist.
-		for _, p := range cfg.ToolPaths {
-			if _, err := os.Stat(p); err != nil {
-				warn(fmt.Sprintf("tool_path %q does not exist", p))
-			}
-		}
-
-		// Validate inference params.
-		gp := config.ResolveInferParams(cfg, "")
-		if gp.Temperature < 0 || gp.Temperature > 2 {
-			fail(fmt.Sprintf("temperature %.1f is out of range [0, 2]", gp.Temperature))
-		}
-		if gp.RepetitionPenalty < 1 || gp.RepetitionPenalty > 3 {
-			warn(fmt.Sprintf("repetition_penalty %.1f is unusual (typical: 1.0–2.0)", gp.RepetitionPenalty))
-		}
-		if gp.MaxTokens < 1 {
-			fail("max_tokens must be positive")
-		}
+	if cfg.ContextWindow > 0 {
+		fmt.Printf("%-20s %d\n", "context_window", cfg.ContextWindow)
 	}
-
-	// ── cues.yaml ──
-	cues, cueErr := cue.Load()
-	if cueErr != nil {
-		fail("cues.yaml error: " + cueErr.Error())
-	} else {
-		if len(cues) == 0 {
-			fail("cues.yaml is empty — no cues defined")
-		}
-		names := map[string]bool{}
-		for _, c := range cues {
-			if names[c.Name] {
-				fail(fmt.Sprintf("duplicate cue name: %q", c.Name))
-			}
-			names[c.Name] = true
-			if c.Category == "" {
-				warn(fmt.Sprintf("cue %q has no category", c.Name))
-			}
-		}
-		if !names["initial"] {
-			warn("no 'initial' cue (fallback catch-all) defined")
-		}
+	if cfg.MaxTokens > 0 {
+		fmt.Printf("%-20s %d\n", "max_tokens", cfg.MaxTokens)
 	}
-
-	// ── KB ──
-	if kb.Exists() {
-		_, kbErr := kb.Load()
-		if kbErr != nil {
-			fail("kb.json error: " + kbErr.Error())
-		}
+	if args := cfg.ChatTemplateArgsJSON(cfg.Model); args != "" {
+		fmt.Printf("%-20s %s\n", "chat_template_args", args)
 	}
-
-	// ── Print results ──
-	for _, e := range errors {
-		fmt.Fprintf(os.Stderr, "  %s  %s\n", color.Red5("ERROR"), e)
-	}
-	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "  %s  %s\n", color.Yel5("WARN "), w)
-	}
-	if len(errors) == 0 && len(warnings) == 0 {
-		fmt.Printf("  %s  configuration is valid\n", color.Grn5("OK"))
-	} else if len(errors) == 0 {
-		fmt.Printf("\n  %s  %d warning(s), no errors\n", color.Grn5("OK"), len(warnings))
-	} else {
-		fmt.Fprintf(os.Stderr, "\n  %s  %d error(s), %d warning(s)\n",
-			color.Red5("FAIL"), len(errors), len(warnings))
-		return fmt.Errorf("config validation failed")
-	}
+	fmt.Println("config.yaml is valid.")
 	return nil
 }

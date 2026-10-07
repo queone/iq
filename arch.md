@@ -1,674 +1,142 @@
 # iq Architecture
 
-> **Project status: frozen (2026-03-20).**
-> Development halted. The `iq` and `lm` binaries are kept as learning artifacts. The `kb` binary has been superseded by more mature open source alternatives ([AnythingLLM](https://github.com/Mintplex-Labs/anything-llm), [PrivateGPT](https://github.com/zylon-ai/private-gpt), [Khoj](https://github.com/khoj-ai/khoj?tab=readme-ov-file), [Open WebUI](https://github.com/open-webui/open-webui)). For active AI-assisted development, we have moved to [OpenCode](https://github.com/anomalyco/opencode/) with externally-hosted LLMs. This document is preserved for reference.
+> **Project status: reopened (2026-10-06) as the local-model substrate for pi.**
+> Frozen on 2026-03-20 as a learning artifact; reopened with one purpose: run a local MLX model that [pi](https://pi.dev/) can use. This document describes the single-model controller and records what was removed.
 
 ## Purpose
 
-IQ is a local generative AI system for Apple Silicon, capable of running LLMs entirely offline with no cloud dependency. The project ships three focused binaries from a shared monorepo: **`iq`** (coding assistant), **`lm`** (local model manager), and **`kb`** (private knowledge base). All three share the same `internal/` packages. The **`iq`** CLI orchestrates a full prompt pipeline — cue classification, tool detection, KB retrieval, inference, and session management — all from a unified command-line interface.
+iq runs one offline MLX model on Apple Silicon for pi. It answers three questions pi cannot: which model this machine can hold, how to get it, and how to keep an OpenAI-compatible server running for it. Everything else that an agent needs — the loop, tools, sessions, compaction, RAG, web search — lives in pi and its packages.
 
-## System Summary
-
-### System Diagram
+## System Diagram
 
 ```
-┌─────────────────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
-│         iq CLI (Go)         │  │    lm CLI (Go)   │  │      kb CLI (Go)     │
-│                             │  │                  │  │                      │
-│ start/stop  cue  kb  ask    │  │ get  list  show  │  │ start  ingest  ask   │
-│ pry  pool  embed  config    │  │ search  rm  perf │  │ list  search  config │
-└──────┬──────────────────────┘  └───────┬──────────┘  └───────┬──────────────┘
-       │                                 │                      │
-       ▼                                 ▼                      ▼
-┌─────────┐ ┌──────────────┐ ┌────────┐ ┌──────────────────────┐ ┌───────────┐
-│ HF      │ │~/.config/iq/ │ │cues    │ │ infer_server.py      │ │~/.config/ │
-│ cache   │ │config.yaml   │ │.yaml   │ │ sidecars (pool)      │ │kb/        │
-│         │ │models.json   │ │        │ │                      │ │config.yaml│
-│~/.cache/│ │kb.json       │ │name    │ │ pool      :27001+    │ │kb.json    │
-│hugging  │ │sessions/     │ │category│ │                      │ │           │
-│face/hub/│ │run/*.json    │ │desc    │ │ OpenAI-compatible    │ └───────────┘
-│         │ │              │ │prompt  │ │ HTTP API             │
-│         │ └──────────────┘ └────────┘ └──────────────────────┘
-│         │                             ┌──────────────────────┐
-│         │                             │ embed sidecar :27000 │
-└─────────┘                             └──────────────────────┘
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│          iq (Go)             │        │           pi (TS)            │
+│ doc  pick  start  stop       │        │ harness, tools, sessions,    │
+│ restart  status  pi  config  │        │ extensions, packages         │
+└──────┬───────────────────────┘        └──────────────┬───────────────┘
+       │ writes provider entry                         │ reads
+       ▼                                               ▼
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│ ~/.config/iq/config.yaml     │        │ ~/.pi/agent/models.json      │
+│ ~/.config/iq/run/*.json      │        │ providers.iq → :27001/v1     │
+└──────┬───────────────────────┘        └──────────────┬───────────────┘
+       │ spawns                                        │ POST /v1/chat/completions
+       ▼                                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ python -m mlx_lm server --model <snapshot> --port 27001              │
+│ OpenAI-compatible: tools, array content, stream_options, tool_calls  │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ loads
+                               ▼
+                  ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<hash>/
+                  (downloaded by `hf download` on first `iq start`)
 ```
 
-
-### Package Structure
-
-Domain logic lives in isolated packages under `internal/`. Each package owns one conceptual domain — its types, helpers, constants, and persistence logic — and exports a clean API consumed by `cmd/iq` and by sibling packages.
+## Package Structure
 
 | Package | Domain |
 |---------|--------|
-| `internal/config` | Config CRUD, model pool, embed model, migrations |
-| `internal/search` | DuckDuckGo web search client with Brave fallback; `Client` struct for concurrency-safe config |
-| `internal/sidecar` | Sidecar lifecycle, port allocation, pool dispatch, state files, HTTP transport (Call/Stream/RawCall) |
-| `internal/cue` | Cue types, CRUD, defaults, lookup helpers, embedded default YAML |
-| `internal/embed` | Embed sidecar startup, HTTP embedding calls, cosine similarity, cue classifier |
-| `internal/cache` | Response cache (FNV64a hashing, TTL, load/save) |
-| `internal/tools` | Tool registry, parser, executor (timeout + output cap), signal detection, confirm mode |
-| `internal/lm` | HuggingFace API client, model search/enrich, manifest CRUD, model parsing, formatting helpers |
-| `internal/kb` | Knowledge base index, chunking, hybrid search, ingest |
+| `internal/config` | Schema-3 `config.yaml`: one model, `context_window`, `max_tokens`, `chat_template_args`; in-memory migration from schema 2 |
+| `internal/model` | Embedded catalog, memory probe, fit rule, `Pick`, Hugging Face cache resolution, `hf download` |
+| `internal/sidecar` | Sidecar lifecycle: port allocation, `mlx_lm.server` launch, readiness probe, state and log files, orphan cleanup, VLM guard, venv discovery |
+| `internal/usage` | Shared help-page renderer |
+| `internal/color` | Terminal colour helpers |
 
-The `cmd/iq` package is the CLI entry point — it wires commands (cobra), flags, the prompt pipeline, REPL, and orchestration.
+`cmd/iq` wires the commands: `doc`, `pick`, `start`, `stop`, `restart`, `status`, `pi`, `config`, `version`.
 
 ## Current Platform
 
-- Apple Silicon Mac (M1 or later) — required for MLX-based local inference
-- Go 1.26+ for the three installable CLI binaries (`iq`, `lm`, `kb`)
-- Python 3 with `mlx-lm` (via pipx) for the inference sidecar
-- `mlx-embedding-models` injected into the `mlx-lm` venv for the embedding sidecar
-- `hf` CLI (via pipx) for HuggingFace model downloads and metadata
-- Hugging Face Hub as the canonical model registry
+- Apple Silicon Mac (M1 or later)
+- Go 1.26+ for the single `iq` binary
+- Python 3 with `mlx-lm` 0.30.7 or newer (via pipx); its `mlx_lm.server` is the inference sidecar
+- `hf` CLI (via pipx) for downloads
+- Hugging Face Hub as the model registry
 
 ## Core Files
 
-- `AGENTS.md`: governance contract (CLAUDE.md is a symlink)
+- `AGENTS.md`: governance contract
 - `arch.md`: this document — system structure and durable decisions
-- `plan.md`: forward-looking roadmap and Ideas To Explore
-- `CHANGELOG.md`: per-release version history
-- `build.sh`: self-contained build, release-prep, and release tooling
-- `cmd/iq/main.go`, `cmd/lm/main.go`, `cmd/kb/main.go`: the three installable binaries
-- `internal/`: domain packages shared by all three binaries (config, search, sidecar, cue, embed, cache, tools, lm, kb)
-- `govna/`: governance documentation (development cycle, build/release, AC template, roles, audit)
-- `docs/critique-protocol.md`: critique protocol (repo-specific; not a governa doc)
+- `plan.md`: direction and ideas to explore
 
 ## Major Components
 
-### Model Management
+### Model Pick
 
-The **`lm`** binary handles the full model lifecycle (extracted from `iq` in Phase 1). Models are downloaded from [mlx-community](https://huggingface.co/models?filter=mlx) via the `hf` CLI and stored in the standard HuggingFace cache at `~/.cache/huggingface/hub/`. A manifest at `~/.config/iq/models.json` caches per-model metadata (pull date, task tag); `lm list` and `lm show` reconcile it against the cache, so it mirrors what is on disk.
+`iq pick` reads unified memory with `sysctl -n hw.memsize` and walks the embedded catalog (`internal/model/catalog.yaml`). Each entry carries `id`, `disk_gb`, `context_window`, optional `chat_template_args`, `verified`, and `notes`.
 
-Key operations: `search`, `get`, `list`, `show`, `rm`.
+Fit rule: budget = 70% of memory; estimate = `disk_gb × 1.15 + 2 GB` for weights plus key-value cache. The pick is the largest **verified** entry whose estimate fits. Unverified entries are never picked; they become verified only after the catalog verification run (structured tool calls under `mlx_lm.server`, no end-of-sequence leak). On a 24 GiB machine the budget is about 18 GB, so a 5.7 GB model fits and a 16.4 GB mixture-of-experts model does not.
 
-`lm search` queries the HF API, enriches results in parallel (one goroutine per model) to populate DISK and EST MEM, and displays TASK / DISK / PARAMS / EST MEM / DOWNLOADS. The TASK column shows the HuggingFace `pipeline_tag` — green for `text-generation` and `feature-extraction` (displayed as `embedding`), red for unsupported types (e.g. `image-text-to-text`). Accepts an optional query string or a numeric count (e.g. `lm search 100`).
-
-`lm get` checks the model's task type before downloading; if it is not `text-generation`, a yellow warning is printed (download proceeds anyway). After download, the `pipeline_tag` is cached in the manifest for offline display. Infers a suggested size (`small` for < 2GB, `large` otherwise) and prints the `iq pool add` command to assign it.
-
-`lm list` first reconciles the manifest with the HF cache: every cached model missing from the manifest is registered (cache directory mtime as PULLED; the task tag is then backfilled like any other untagged entry, HF API first with local `config.json` fallback), every manifest entry whose cache directory is gone is dropped, and a gray note reports each change. It then displays TASK alongside DISK / PULLED / PARAMS / EST MEM / TIER. On first display, missing task tags are backfilled from the HF API in parallel (with local `config.json` inference as fallback) and persisted to the manifest.
-
-`lm show` runs the same reconcile, so any cached model can be shown; a model in neither the manifest nor the cache is an error. It displays the TASK field (backfilled from HF API or local `config.json` inference if not cached).
-
-**Local task inference** (`inferTaskFromConfig`) — when the HF API returns no `pipeline_tag`, IQ reads the model's local `config.json` and infers the task: vision indicator keys (`vision_config`, `visual`, `vision_tower`, `image_size`) or known VLM `model_type` values → `image-text-to-text`; known text-generation `model_type` values (only after confirming no vision indicators) → `text-generation`.
-
-`lm rm` removes any cached model whether or not the manifest lists it, and fails with an error when the model is in neither the manifest nor the cache. It auto-removes the model from the pool and stops running sidecars (including the embed sidecar) with yellow warnings before prompting for confirmation. The confirmation prompt is printed in yellow with `[y/N]` in default color.
-
-### Configuration
-
-Manages `~/.config/iq/config.yaml` via the `internal/config` package. Exports `Message`, `Config`, `ModelEntry`, `InferParams`, `ResolvedParams` structs, `Dir()`, `Path()`, `Load()`, `Save()`, `EmbedModel()`, `AllModels()`, `HasModel()`, `ModelEntryFor()`, `ResolveInferParams()`, and `DefaultEmbedModel`. `Message` is the shared role+content type used across inference, session persistence, and cache key computation. `Load()` returns in-memory defaults on read-only filesystems. The model pool is a flat ordered list of `ModelEntry` values — each entry holds a model ID, an optional `context_window` (input budget for trimming), and optional per-model inference parameter overrides.
-
-**Inference parameters** — eight parameters can be tuned globally and/or per-model:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `repetition_penalty` | 1.3 | Penalises repeated tokens (1.0 = off) |
-| `temperature` | 0.7 | Sampling temperature (lower = more deterministic) |
-| `max_tokens` | 8192 | Maximum tokens in response |
-| `top_p` | — | Nucleus sampling: sample from the smallest token set whose cumulative probability ≥ p |
-| `min_p` | — | Discard tokens below this probability relative to the top token |
-| `top_k` | — | Sample from only the k most probable tokens |
-| `stop` | — | List of strings that halt generation early (trimmed from response) |
-| `seed` | — | Fix the random seed for reproducible outputs |
-
-The first three always carry a hardcoded default. The last five are unset by default (nil/empty) — when absent, mlx_lm uses its own defaults. Resolution order: **per-model override > global config > hardcoded default**. Pointer types (`*float64`, `*int`) distinguish "not set" from "set to zero."
-
-Practical guidance: stacking multiple sampling strategies (e.g. `top_k` + `top_p` + `min_p`) can interact in non-obvious ways. Most setups get 90% of the benefit from `temperature` + `top_p` (or `min_p`) + `stop`.
-
-```yaml
-# v2 schema — flat models list with optional per-model param overrides
-version: 2
-repetition_penalty: 1.3
-temperature: 0.7
-max_tokens: 8192
-models:
-  - id: mlx-community/Qwen2.5-7B-Instruct-4bit
-  - id: mlx-community/Llama-3.2-3B-Instruct-4bit
-    temperature: 0.3
-    max_tokens: 2048
-embed_model: mlx-community/bge-small-en-v1.5-bf16
-```
-
-Use `lm perf sweep` to validate model and parameter choices on your hardware.
-
-Pool commands: `iq pool list`, `iq pool add <model>`, `iq pool rm <model>`.
-
-Embed model commands: `iq embed show`, `iq embed set <model>`, `iq embed rm`.
-
-**Schema versioning** — `config.yaml` carries a `version:` field (integer). `ConfigVersion = 2` is the current schema. On load, the version is peeked first: version 0 (absent field) triggers the legacy migration chain; version 1 triggers `migrateV1`; version > `ConfigVersion` returns a hard error ("upgrade iq"); current version is unmarshalled directly. After any migration the version is stamped to `ConfigVersion` and the file is saved. `Load()` always returns a `Config` with `Version == ConfigVersion` after a successful migration.
-
-Auto-migration chain: v0 (no version field) — four-tier single-string (`tiny`/`fast`/`balanced`/`quality`), flat-list tiers, and legacy `cue_model`/`kb_model` fields are converted via `migrateV0`. v1 — structured `tiers: {fast: [...], slow: [...]}` is converted to the flat `models:` list by `migrateV1`: each model ID in each tier becomes a `ModelEntry`, preserving any per-tier param overrides as per-model overrides; order is fast-first then slow. The legacy `pipeline:` field is silently ignored on load (removed in v0.10.0).
-
-**Config inspection** — `iq config` (or `iq config show`) dumps the full effective configuration: config.yaml settings, model pool with per-model inference overrides, cue summary (count + categories), KB status (sources/chunks), all operational thresholds (cue classify 0.40, keyword boost 0.10, tool classify 0.60, KB min score 0.72, KB top-k 3), and runtime constants (ports, timeouts, cache TTL, registry sizes). `iq config validate` checks config.yaml parse, model assignments, embed model, deprecated fields, tool path existence, inference param ranges, cue uniqueness, and KB integrity — reports errors and warnings.
-
-### Cue Definitions
-
-The **`iq cue`** command manages `~/.config/iq/cues.yaml`, seeded from an embedded default set of 17 cues across 8 categories.
-
-```
-general  code  reasoning  language_tasks  generation  summarization  safety  domain
-```
-
-Each cue carries a `name`, `category`, `description`, `system_prompt`, `suggested_tier` (retained for backward compatibility, not used in routing), and an optional direct `model` override (kept for power users, not actively promoted in routing).
-
-Commands: `list`, `show`, `add`, `edit`, `rm`, `assign`, `unassign`, `reset`, `sync`.
-
-`sync` merges new factory cues into an existing `cues.yaml` without overwriting user customisations — useful when upgrading IQ to a version that adds new cues.
+`iq pick -w` writes the entry's id, `context_window`, and `chat_template_args` to `config.yaml`. `iq start` without a configured model runs the same pick and saves it.
 
 ### Service Daemon
 
-The **`iq start`** / **`iq stop`** commands manage sidecar processes. Each sidecar runs as a detached `infer_server.py` process (a custom MLX inference server embedded in the Go binary, extracted to `~/.config/iq/` at startup). Ports are assigned dynamically starting at 27001. State is persisted to `~/.config/iq/run/<model-slug>.json` (PID, port, model, start time; `tier` field always `"infer"` for inference sidecars), and logs go to `~/.config/iq/run/<model-slug>.log`.
+`iq start` / `iq stop` / `iq restart` manage one detached `mlx_lm.server` process — mlx-lm's own OpenAI-compatible server, launched as `python -m mlx_lm server` from the `mlx-lm` pipx venv. The server accepts `tools`, array-form message content, and `stream_options`, and returns structured `tool_calls`, which is what pi needs. It prints a harmless "not recommended for production" warning to the sidecar log on every start.
 
 Start sequence:
-1. Allocate next free port from 27001+
-2. Resolve HF snapshot directory (`snapshots/<hash>/`) — the `--model` path
-3. **VLM guard** — read `config.json` and reject vision-language models (checks for `vision_config`, `vision_tower`, `image_size` keys and known VLM `model_type` values). `mlx_lm.load` cannot handle vision weights.
-4. Locate Python interpreter from the `mlx-lm` pipx venv; extract `infer_server.py` to `~/.config/iq/`
-5. Spawn detached subprocess (`Setsid: true`)
-6. Poll `GET /v1/models` until 200 OK or 120s timeout. A background goroutine calls `cmd.Wait()` to detect early crashes reliably (avoids zombie-pid false positives from signal-0 checks).
-7. On failure: print last 10 log lines + path
+1. Resolve the model: argument, else `config.yaml`, else pick and save
+2. Resolve the Hugging Face snapshot directory; run `hf download <id>` when it is missing
+3. **VLM guard** — reject vision-language models by inspecting `config.json`; `mlx_lm.server` cannot serve them
+4. Allocate the next free port from 27001+
+5. Spawn the detached subprocess (`Setsid: true`) with `--chat-template-args` when configured
+6. Poll `GET /v1/models` until 200 OK or a 120-second timeout; a goroutine on `cmd.Wait()` detects early crashes
+7. On failure, print the last ten log lines and the log path
 
-`iq start/stop` accepts a model ID (acts on one) or no argument (all assigned models). On first run with no models in the pool, `iq start` prints a recommended setup with example `lm get` and `iq pool add` commands.
+`iq stop` with no argument also sweeps orphaned servers: anything matching `infer_server.py`, `mlx_lm.server`, `mlx_lm server`, or `embed_server.py` on an iq-managed port. The first two legacy patterns clean up processes from the three-binary release.
 
-**Pool dispatcher (`pickAnySidecar`)** — scans live state files and returns the first live inference sidecar (excluding the embed sidecar).
+**pi integration (`iq pi`)** — prints the provider entry pi needs for the one running sidecar, or merges it into `~/.pi/agent/models.json` with `-w` (`-f PATH` targets another file). The entry is provider `iq` with `baseUrl http://127.0.0.1:<port>/v1`, `api openai-completions`, a dummy `apiKey`, and one model whose id is `default_model` — the only id `mlx_lm.server` accepts for its loaded model — plus `contextWindow` and `maxTokens` when `config.yaml` sets them for the running model. `iq pi` refuses to run while more than one inference sidecar is live. Select the model in pi with `pi --model iq/default_model`.
 
-`iq doc` checks runtime dependencies: `python3` available, `mlx_lm.server` found (needed for its venv Python) and `--model` flag supported, `mlx-embedding-models` package installed, all assigned model HuggingFace cache dirs exist.
+`iq status` shows MODEL / ENDPOINT / PID / UPTIME / RUNNING / MEM for every live sidecar plus the configured model when it is stopped, then iq's own memory and the total.
 
-**Embeddings** — handled by a single local Python sidecar (`embed_model`, port 27000) started with `iq start`. Serves cue classification, tool detection, and KB indexing/retrieval. Configure via `iq embed`.
+`iq doc` checks Apple Silicon, `python3`, `mlx_lm.server` and its `--model` and `--chat-template-args` flags, `hf`, and whether the configured model's snapshot is in the cache.
 
-`iq status` (alias: `iq st`) shows MODEL / ENDPOINT / PID / UPTIME / RUNNING / MEM for all running inference sidecars plus the embed sidecar row, IQ process memory, and combined total.
+### Configuration
 
-### Knowledge Base
+`~/.config/iq/config.yaml`, schema version 3:
 
-The **`iq kb`** command manages `~/.config/iq/kb.json`, an embedded vector index used for RAG (Retrieval-Augmented Generation).
-
-> **What RAG is.** Large language models know only what was in their training data. RAG extends this by retrieving relevant passages from your own documents at query time and injecting them into the prompt as plain text context — no fine-tuning, no model modification. The model reasons over retrieved material just as it would any other text in its context window. The key insight: embeddings are used for *retrieval* (finding relevant passages by semantic similarity), but the model itself only ever sees text. Embeddings never enter the model directly in this architecture.
-
-**How it works end-to-end:**
-
-```
-iq kb ingest ~/projects/myapp
-    │
-    ├── walk directory (skips .git, node_modules, vendor, __pycache__, hidden dirs)
-    ├── read each text file (.go, .md, .py, .yaml, ...)
-    ├── structure-aware chunking (see below)
-    ├── embed each chunk via embed sidecar :27000 (batches of 20)
-    └── store chunk text + 384-float vector in kb.json
-
-iq ask "how does the auth middleware work?"
-    │
-    ├── embed user input → query vector
-    ├── hybrid scoring: cosine_similarity + keyword boost — Go, in-memory
-    ├── top-3 chunks retrieved (score ≥ 0.72 threshold)
-    ├── injected as plain text context in user message:
-    │     "Relevant context from knowledge base:
-    │      KB Result Chunk 01: /path/to/middleware.go (lines 42–81)
-    │      <chunk text>
-    │      KB Result Chunk 02: /path/to/README.md (lines 12–51)
-    │      <chunk text>"
-    └── inference proceeds as normal — model sees your actual code
+```yaml
+version: 3
+model: mlx-community/Qwen3.5-4B-OptiQ-4bit
+context_window: 32768
+max_tokens: 4096
+chat_template_args: {enable_thinking: false}
 ```
 
-**Chunking strategies** — the chunker dispatches by file type for structure-aware splits:
+`chat_template_args` is a map passed verbatim as JSON to `mlx_lm.server --chat-template-args`. Qwen3.5 needs `{enable_thinking: false}` for plain tool use. `context_window` and `max_tokens` are exported to pi; iq itself sends no inference requests.
 
-| File type | Strategy | Boundaries |
-|-----------|----------|------------|
-| `.go` | Declaration-based | Each top-level `func`, `type`, `var`, `const` = one chunk |
-| `.md` | Heading-based | Each heading + its content body = one chunk; label carries full heading path |
-| `.yaml`, `.yml`, `.toml` | Key-value blocks | Top-level key groups |
-| Everything else | Prose/paragraph | Paragraphs grouped up to 1600 runes per chunk |
-
-Each chunk text is prefixed with `File: path/to/file.go` metadata before embedding to improve retrieval relevance.
-
-**Hybrid scoring** — KB search combines cosine similarity with keyword boosting. `extractKeywords` pulls meaningful tokens from the query (splits on whitespace/punctuation, expands camelCase, keeps tokens ≥ 4 chars). Each keyword found in a chunk adds +0.05; function call patterns (`keyword(`) add an extra +0.12 to surface callsites over definitions. Total keyword boost is capped at +0.25.
-
-KB retrieval is **always-on** when `kb.json` exists and the embed sidecar is running. Disable per-prompt with `-K / --no-kb`. The minimum injection score (`kb_min_score`, default 0.72) is configurable in `config.yaml`; `iq config show` reports the effective value. The `-d / --debug` flag adds a STEP 3 KB RETRIEVE trace showing the threshold, each chunk's source, line range, and similarity score.
-
-Commands: `ingest` (alias: `in`), `list`, `search`, `rm`, `clear`.
-
-```
-iq kb ingest <path>     # file or directory tree
-iq kb in <path>         # alias
-iq kb list              # show sources with file/chunk counts and ingest time
-iq kb search <query>    # raw similarity search — shows score + preview, no inference
-iq kb rm <path>         # remove a source and all its chunks
-iq kb clear             # wipe entire kb.json
-```
-
-`iq pry` also supports KB retrieval via `-k / --kb`.
-
-### Inference and REPL
-
-The **`iq ask`** command provides an interactive REPL. One-shot prompts can also be sent directly via `iq "message"`, which routes through the same pipeline. The `ask` subcommand remains available as an explicit alias.
-
-Routes user prompts through a 6-step pipeline:
-
-**Step 1 — CLASSIFY.** Hybrid scoring: the user input is embedded via the embed sidecar (:27000) and compared against pre-computed cue description embeddings via cosine similarity. A deterministic keyword boost (+0.10) is added when the cue name phrase (e.g. "code review", "math", "summarization") appears in the input, preventing embedding drift from silently misrouting explicit intent. The highest hybrid score wins (minimum threshold: 0.40). Falls back to `initial` if the embed sidecar is not running. Debug trace shows `method: hybrid` when a keyword boost influenced the result.
-
-> **What embeddings are.** An embedding is a fixed-size vector of numbers — in IQ's case, 384 floats — that a neural network uses to represent the meaning of a piece of text. Networks trained on large corpora learn to place semantically similar content close together in this high-dimensional space: "explain a transformer model" and "describe how attention works" will produce vectors pointing in nearly the same direction even though they share no words. This numerical representation of meaning is the bridge between raw data and neural cognition. It enables similarity search and retrieval (vector DBs), routing and classification without generative inference, memory systems in agentic AI, and multi-modal fusion (images and text embedded into the same space so they can be compared directly). In IQ, embeddings serve triple duty: classifying prompts to cues, detecting when tools are needed, and retrieving relevant knowledge base chunks for RAG.
-
-The cue embedding cache (`~/.config/iq/cue_embeddings.json`) is built on first use and refreshed automatically when cues change.
-
-**Step 1b — TOOL DETECT.** Determines whether to enable read-only tools for this prompt. Three detection paths, checked in order:
-
-1. **Forced** — `-T` flag forces tools on; `--no-tools` forces them off.
-2. **File-path heuristic** — deterministic check for slash-separated paths (excluding URLs) or words ending in known source-code extensions (`.go`, `.py`, `.md`, `.json`, etc.).
-3. **Embed-based signal matching** — reuses the input vector already computed in Step 1 (zero extra API calls). Compares against 5 pre-embedded tool signal descriptions via cosine similarity. If the best match exceeds the tool threshold (0.60), tools are enabled.
-
-The 5 tool signals and the tools they cover:
-
-| Signal | Tools | Description |
-|--------|-------|-------------|
-| `time_date` | `get_time` | Time, date, day of the week |
-| `file_access` | `read_file`, `list_dir`, `file_info` | Read/list files, file metadata |
-| `file_search` | `search_text`, `count_lines` | Search for text in files, count lines |
-| `calculation` | `calc` | Math expressions, percentages, arithmetic |
-| `web_search` | `web_search` | Current events, latest news, up-to-date facts, live web lookup |
-
-Tool signal embeddings are cached in `~/.config/iq/tool_embeddings.json` and versioned with an FNV32a hash over signal names and descriptions so they auto-refresh when signals change.
-
-**Step 2 — ROUTE.** Resolves sidecar from the cue. Picks the first live inference sidecar from the flat pool (`pickAnySidecar`) and applies the cue's system prompt. No tier discrimination.
-
-**Step 3 — KB RETRIEVE.** If `kb.json` exists and the embed sidecar is running (and `--no-kb` is not set), the top-3 most similar chunks are retrieved via hybrid scoring. Only chunks whose score meets the minimum threshold (`kb_min_score`, default 0.72; configurable in `config.yaml`) are injected as plain text context in the user message. If no chunks clear the threshold, KB injection is skipped entirely. Skipped silently if KB is empty or unavailable.
-
-**Step 4 — ASSEMBLE.** Combines system prompt (from cue, plus tool instructions if tools enabled), session history (if any), and user message (with KB context prepended if any) into the structured message array sent to inference. After assembly, if `context_window` is set on the active model, IQ estimates total input tokens (chars/4 heuristic) and trims to fit `context_window − max_tokens` tokens: KB chunks are dropped first (from the end), then session turns oldest-first; the system prompt and current user input are never trimmed. A gray warning is printed if anything was dropped. `--dump-prompt <file>` writes the post-trim array as indented JSON and exits before inference (use `-` for stdout).
-
-**Step 4b — CACHE CHECK.** Computes an FNV64a hash over the assembled message array and model ID, then looks up the hash in `~/.config/iq/response_cache.json`. On a hit (entry exists and is within the 1-hour TTL), the cached response is returned immediately and inference is skipped entirely. Disabled in session mode, when tools are enabled (tool results depend on live execution), and via `--no-cache`.
-
-**Step 5 — INFERENCE LOOP.** Sends to the target sidecar via `POST /v1/chat/completions`. Non-tool path streams tokens to stdout by default; trace mode (`-d`) forces non-streaming to prevent stdout/stderr interleaving from corrupting the debug output.
-
-When tools are enabled, inference takes one of two paths based on how tools were detected:
-
-**Embed short-circuit path** (`tt.Reason == "embed"`): When Step 1b identifies a tool signal via embedding, IQ executes the identified tool directly without an inference pass. `GuardArgs` builds the argument map from the user input (e.g., for `calc`, `extractCalcExpression` converts natural language to a valid math expression). If the tool succeeds, output is printed directly. If it fails (or `GuardArgs` returns nil for unextractable args), IQ falls back to direct inference with the cue's plain system prompt (tool instructions stripped to prevent re-invocation). This path covers all embed-detected tool signals: `time_date`, `file_access`, `file_search`, `calculation`, and `web_search`.
-
-**Model-driven path** (`tt.Reason == "file path"` or `"forced"`): Used when file-path heuristics or `--tools` flag triggered tool mode rather than embed signal. Runs a unified non-streaming tool loop:
-1. **Pass 1 — model-driven dispatch.** IQ calls the model normally with `BuildToolPrompt` injected into the system message. The model emits `<tool:TOOL_NAME>` followed by JSON arguments, or answers directly.
-2. **Passes 2+ — unified tool loop** (up to 5 iterations). IQ's parser extracts `<tool_call>` blocks first, then falls back to `ParseRoutingPrefix` for `<tool:NAME>` format — handles correct JSON, broken JSON (regex fallback), wrong tag names, unclosed tags, and markdown-fenced JSON. Successful tool output is printed directly; errors trigger another inference pass. Loop ends when no tool calls remain, or after 5 iterations.
-
-**Thinking model support** — models like DeepSeek-R1 that emit `<think>...</think>` reasoning blocks are handled transparently: during streaming, think-block tokens are buffered in memory (not echoed to the user); the clean result is printed after stripping. Any tokens streamed before `<think>` is detected are tracked so they are not re-printed when the final result is shown. Non-streaming mode strips think blocks from the full response.
-
-**Step 5b — CACHE WRITE.** On a cache miss, stores the inference response in `response_cache.json` keyed by the same FNV64a hash from Step 4b. Expired entries (>1 hour) are pruned on write. Skipped when cache is disabled or session mode is active.
-
-**Step 6 — PERSIST.** Appends the turn to `~/.config/iq/sessions/<id>.yaml`. Reads and writes are protected by `syscall.Flock` advisory locks (`<id>.yaml.lock`) — shared for reads, exclusive for writes — preventing YAML corruption from concurrent REPL instances. After the first exchange, a background goroutine asks any available sidecar to generate a short name (≤ 5 words) and description (≤ 15 words) for the session.
-
-**Flags:**
-```
--r, --cue NAME          Skip classification, use this cue directly
--c, --category NAME     Restrict auto-classification to one category
--m, --model ID          Override model directly (must be running)
--s, --session ID        Load/continue a named session
--K, --no-kb             Disable knowledge base retrieval for this prompt
--C, --no-cache          Disable response cache
--T, --tools             Force enable read-only tool use
--N, --no-tools          Disable tool use
--n, --dry-run           Trace steps 1–4, skip inference
--D, --dump-prompt FILE  Write assembled messages as JSON (- for stdout), skip inference
--d, --debug             Trace all steps including inference
--S, --no-stream         Collect full response before printing
-```
-
-**REPL mode** — entered when no message arg and stdin is a terminal. Supports `/cue`, `/session`, `/clear`, `/dry-run`, `/debug`, `/tools` (cycles auto → on → off → auto), `/help`, `/quit`. Pipe-friendly: `echo "..." | iq ask` takes the stdin path.
-
-### Tools
-
-> **How tool use actually works.** The model never executes anything — it is a sandboxed token predictor with no OS access, no network, and no file system. What happens: IQ's system prompt gives the model a list of tool definitions (name, description, parameter schema). When the model decides a tool would help, it emits a structured `<tool_call>` block — not an execution, just a formatted request. IQ's Go code detects that syntax, validates the call, runs the actual function, and injects the result back into the conversation as a new message. The model then continues from there. The "agentic" behaviour is a loop IQ drives: call model → check for tool calls → execute tool → append result → call model again → repeat until the model emits a plain-text response. The model cannot initiate anything between turns, cannot run in the background, and cannot do anything IQ's harness code does not explicitly handle. This is why all tools are read-only and file paths are validated before execution — IQ is the one pulling the trigger.
-
-In **ask mode** (via `iq "<prompt>"` or `iq ask "<prompt>"`), eight read-only tools are available. All file-access tools enforce path security: only the current working directory and paths listed in `config.yaml` `tool_paths` are allowed. Paths are resolved through symlinks and checked via prefix matching.
-
-**Execution safety** — every tool handler runs inside a goroutine with a 30-second timeout (`ExecuteTimeout`). If the handler does not return in time, the call returns a timeout error instead of blocking the inference loop. Tool output injected into the conversation context is capped at 32 KB (`MaxOutputBytes`); longer output is truncated with a marker. Each tool carries a `ReadOnly` flag (true for all current tools); future write tools will require `--confirm` mode to execute.
-
-**Schema validation** — `ValidateCall()` checks tool calls against the registry schema before execution: tool must exist, required params present, no unknown params, correct types (string/number). `ParseCallsStrict()` wraps the permissive parser and rejects malformed calls, preventing silent parameter misinterpretation. The permissive parser (`ParseCalls`) remains the default for resilience; strict mode is available for automation and high-assurance use.
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `get_time` | *(none)* | Current date, time, timezone, day of week |
-| `read_file` | `path` (required) | Read file contents (max 64KB) |
-| `list_dir` | `path` (required) | List directory entries |
-| `file_info` | `path` (required) | File size, modification time, permissions |
-| `calc` | `expression` (required) | Evaluate math: `+`, `-`, `*`, `/`, `%`, parentheses, decimals |
-| `search_text` | `pattern` (required), `path` | Regex search across files (max 50 matches, skips .git/vendor/etc.) |
-| `count_lines` | `path` (required) | Count lines in a file |
-| `web_search` | `query` (required), `count` | Search the web via DuckDuckGo with Brave fallback (default 3 results, max 20) |
-
-The tool system prompt (`BuildToolPrompt`) is appended to the system message when tools are active. It lists all available tools with their parameter schemas, the current working directory, and instructs the model to emit `<tool:TOOL_NAME>` (followed by JSON arguments) or `<no_tool>` (followed by a direct answer) when a tool is needed.
-
-### Raw Sidecar Access
-
-The **`iq pry`** command bypasses the IQ prompt pipeline, sending a message directly to a specific sidecar for debugging and model exploration.
-
-
-```
-iq pry <model> [flags] <message>
-
--c, --cue <n>       Use a cue's system prompt
--s, --system <text> Use a literal system prompt
--k, --kb            Retrieve knowledge base context (prepended to system prompt)
--S, --no-stream     Collect full response before printing
-```
-
-`--cue` and `--system` are mutually exclusive. Accepts a specific model ID. Prints routing info in gray before the response and elapsed time after.
-
-### Benchmarking
-
-The **`lm perf`** command evaluates model performance using an embedded benchmark corpus. Results are stored in `~/.config/iq/benchmarks.json`.
-
-Benchmark types:
-- **KB retrieval** — measures search quality (MRR = Mean Reciprocal Rank)
-- **Cue classification** — measures accuracy and average similarity score against the embedded benchmark corpus
-- **Tool use** — sends 14 prompts (2 per tool) through the model-driven dispatch pipeline; measures routing accuracy (did the model pick the correct tool?) and execution success rate. Use `-v` for per-prompt debug detail.
-- **Inference latency** — measures P50/P95 latency and throughput
-
-**Multi-model comparison** — `--models m1,m2,m3` runs the same benchmark across multiple models and prints a comparison table at the end. For embed-type benchmarks (kb, cue), temporary sidecars are spun up as needed. For infer/tool, `bench` auto-starts the sidecar if not running and stops it after the run.
-
-**Automated sweep** — `lm perf sweep --models m1,m2 --type infer` automates the pool-add/start/bench/stop cycle: for each model it temporarily adds to the pool, starts the sidecar, runs benchmarks, stops the sidecar, and restores the original pool. Produces a comparison table at the end.
-
-**Model not downloaded** — if a model's HuggingFace snapshot is missing, both `bench` and `sweep` print a red hint: `model not downloaded — run: lm get <model>`.
-
-Commands:
-```
-lm perf bench [--type <type>] [--model <id>] [-V]             # run benchmarks
-lm perf bench --type cue --models model-a,model-b,model-c     # compare models
-lm perf sweep --models m1,m2 --type infer                     # automated sweep
-lm perf show [model] [type]                                   # display stored results
-lm perf clear                                                 # wipe benchmark history
-```
-
-### Embed Sidecar
-
-A single Python process (`embed_server.py`, embedded in the Go binary) runs on port 27000. It uses `mlx-embedding-models` to serve embedding requests over HTTP.
-
-**Model-specific handling:**
-- **nomic** models: `"search_query: "` / `"search_document: "` instruction prefixes
-- **mxbai** models: `"Represent this sentence for searching relevant passages: "` prefix (query only)
-- **bge** models (default): no prefix, max 1600 runes per text
-
-The default embed model is `mlx-community/bge-small-en-v1.5-bf16` (384-dimensional vectors).
-
-**Dependencies:**
-```
-pipx install mlx-lm
-pipx inject mlx-lm mlx-embedding-models
-```
-
-### Dev Hot-Reload for Python Sidecars
-
-Both `infer_server.py` and `embed_server.py` are embedded in the Go binary via `//go:embed` and extracted to `~/.config/iq/` on first start. If the file already exists at that path, the write is skipped — so edits to `~/.config/iq/infer_server.py` or `~/.config/iq/embed_server.py` take effect on the next `iq start` without a Go rebuild.
-
-To reset to the embedded version, delete the file and restart: `rm ~/.config/iq/infer_server.py && iq start`.
-
-### Web Search Library
-
-A `Client` struct in `internal/search` carries configuration (Brave API key) and per-instance rate-limit state, replacing the former package-level variable and eliminating a latent data race on concurrent access. Primary backend is DuckDuckGo HTML scraping; Brave Search API serves as a JSON-based fallback when `brave_api_key` is configured.
-
-- **Client struct**: `search.NewClient(braveAPIKey)` — each client owns its own rate limiter and config; wired via `tools.SetSearchClient()` at prompt startup
-- **Rate limiter**: 1-second minimum interval between DDG requests (per-client `sync.Mutex` + `time.Time`)
-- **Pinned CSS selectors**: `.result`, `.result__title a`, `.result__url`, `.result__snippet` — validated by HTML fixture test
-- **Retry logic**: exponential backoff on DDG 202 (throttling) responses, up to 3 retries
-- **Brave fallback**: if DDG fails and `brave_api_key` is set in config.yaml, queries the Brave Search API
-- **Public API**: `Client.Search()`, `Client.SearchWithOption()` — method-based; free-function wrappers `Search()`, `SearchWithOption()` use a default client for backward compatibility
-
+**Schema versioning** — the version is peeked first. Version 3 loads directly. Version 2 (the flat model pool) is migrated in memory: the first pool model, its `context_window`, `max_tokens`, and `chat_template_args` are kept, everything else is dropped, and a notice names every dropped key. `iq start` and `iq pick -w` persist the migrated file; `iq config show` and `iq config validate` never write. Versions below 2 and above 3 are errors with recovery guidance.
 
 ## Storage Layout
 
 ```
 ~/.config/iq/
-├── config.yaml                  # model pool assignments + embed model + inference params + tool_paths + brave_api_key
-├── models.json                  # manifest of downloaded models (id, pulled_at, hf_cache_path, task)
-├── cues.yaml                    # cue definitions (seeded from embedded defaults)
-├── cue_embeddings.json          # cue description embeddings (auto-built, versioned)
-├── tool_embeddings.json         # tool signal embeddings (auto-built, FNV32a versioned)
-├── response_cache.json          # inference response cache (FNV64a keyed, 1h TTL)
-├── kb.json                      # knowledge base: chunk text + 384-float vectors (RAG)
-├── infer_server.py              # extracted inference sidecar script (see dev hot-reload below)
-├── embed_server.py              # extracted embedding sidecar script (see dev hot-reload below)
-├── benchmarks.json              # performance benchmark results
-├── run/
-│   ├── <model-slug>.json        # generative sidecar state (PID, port, model; tier="infer")
-│   └── <model-slug>.log
-└── sessions/
-    ├── <id>.yaml                # conversation history per session
-    └── <id>.yaml.lock           # advisory flock file (created on first access)
+├── config.yaml                  # schema-3 config (see above)
+└── run/
+    ├── <model-slug>.json        # sidecar state: tier, model, pid, port, started
+    └── <model-slug>.log         # sidecar stdout/stderr
 
-~/.config/kb/
-├── config.yaml                  # kb model pool + embed model + inference params
-└── kb.json                      # knowledge base: chunk text + 384-float vectors
-
-~/.cache/huggingface/hub/
-└── models--org--repo/
-    ├── blobs/                   # actual file content (deduplicated)
-    └── snapshots/
-        └── <hash>/              # symlinks into blobs/ — this is --model path
-            ├── config.json
-            ├── model.safetensors
-            └── tokenizer.json
+~/.cache/huggingface/hub/        # model snapshots, written by hf download
+~/.pi/agent/models.json          # pi's provider config; iq pi -w merges the `iq` provider
 ```
-
-## Data And Control Flow
-
-The diagram below shows how a user prompt flows through IQ’s internal pipeline, from ingestion to final output. All steps are executed locally via sidecars and orchestrated by the CLI, incorporating cue classification, tool detection, knowledge base retrieval, caching, inference, and session persistence.
-
-```
-User input
-    │
-    ├── --cue given? ──────────────────────────────────────────┐
-    │                                                          │
-    ▼  (auto-classify)                                         ▼ (skip classify)
-STEP 1  CLASSIFY — POST /embed → embed :27000                    resolve cue directly
-  input text → 384-float input vector                          │
-    │                                                          │
-    ▼                                                          │
-  cosine_similarity(input_vec, cue_vecs[])                     │
-  best score ≥ 0.40 → cue name                                 │
-    │                                                          │
-    ▼                                                          │
-  highest-score cue name ◄─────────────────────────────────────┘
-    │
-    ▼
-STEP 3  KB PREFETCH (async, launched here — runs concurrently with 1b and 2)
-  goroutine: POST /embed → query vector → hybrid search → top-3 chunks
-  5s timeout — on timeout or error, prompt proceeds without KB context
-    │                     ┌─ concurrently ─┐
-    ▼                     │                │
-STEP 1b  TOOL DETECT      │                │
-  -T/--no-tools flag? → forced             │
-  hasFilePath(input)? → enabled            │
-  else: cosine_similarity(input_vec,       │
-        tool_signal_vecs[])                │
-  best score ≥ 0.60 → tools enabled        │
-    │                     │                │
-    ▼                     │                │
-STEP 2  RESOLVE ROUTE     │                │
-  pickAnySidecar()    →  first live infer  │
-  apply cue sys prompt                     │
-    │                     │                │
-    ▼                     └────────────────┘
-STEP 3  KB COLLECT  (blocks with 5s timeout to receive async KB result)
-  received: top-3 chunks (score ≥ 0.72) → plain text context block
-  timeout/error: proceed without KB context
-    │
-    ▼
-STEP 4  ASSEMBLE
-  system:    cue.system_prompt + tool instructions (if tools enabled)
-  ...        session history (if -s)
-  user:      kb_context (if any) + input
-  [context budget trim: drop KB chunks then session turns if over context_window − max_tokens]
-    │
-    ▼
-STEP 4b CACHE CHECK  (if !session && !tools && !--no-cache)
-  FNV64a hash of messages[] + model ID → lookup response_cache.json
-  ├── hit (within 1h TTL): return cached response, skip to STEP 6
-  └── miss: continue to inference
-    │
-    ▼
-STEP 5  INFERENCE LOOP  (skipped on cache hit)
-  ├── no tools: SSE stream → stdout (token by token); non-streaming in trace mode
-  └── tools: two dispatch paths
-       embed short-circuit (reason=embed): execute tool directly, skip grammar pass
-         ├── tool succeeds: print output directly
-         └── tool fails / no args: fall back to direct inference (plain system prompt)
-       model-driven path (reason=file path|forced):
-         pass 1: plain Call with BuildToolPrompt → model emits <tool:NAME> or answers directly
-         passes 2+: parse <tool_call>/<tool:NAME> blocks → execute → print or re-infer
-         loop until no tool calls remain (up to 5 iterations)
-    │
-    ▼
-STEP 5b CACHE WRITE  (on cache miss, stores response)
-    │
-    ▼
-STEP 6  PERSIST
-  append turn to session YAML
-  background: auto-name via any available sidecar (first turn only)
-```
-
-### Debug Trace Format
-
-IQ prints a detailed **debug trace** of each step when run with **`-d` or `--debug`**. Each step prints a clean header and structured sub-fields:
-
-```
-STEP 1  CLASSIFY
-  task          Cosine-similarity match user input against 17 cue descriptions
-  call          embed bge-small-en-v1.5-bf16 @ localhost:27000
-  resolved_cue  initial (score: 0.5457)
-  elapsed       40ms
-
-STEP 1b TOOL DETECT
-  task          Cosine-similarity match input vector against 5 tool signal descriptions
-  best_signal   time_date (score: 0.72)
-  result        enabled (embed)
-  elapsed       1ms
-
-STEP 2  RESOLVE ROUTE
-  task          Map resolved cue to model tier and running sidecar
-  model         Llama-3.2-3B-Instruct-4bit @ localhost:27001
-  cue           initial → general
-  model_source  pool
-  elapsed       0ms
-
-STEP 3  KB RETRIEVE
-  task          Cosine-similarity search user input against KB chunks
-  call          embed bge-small-en-v1.5-bf16 @ localhost:27000
-  threshold     0.72
-  chunks        3 results
-  top           score:0.9053  cues_default.yaml:1–201
-  top           score:0.8298  prompt.go:293–313
-  top           score:0.8227  arch.md:226–298
-  elapsed       66ms
-
-STEP 4  ASSEMBLE
-  task          Combine system prompt, session history, and user message into message array
-  messages      3
-  est_tokens    1842
-  budget        28672        (context_window=32768, max_tokens=4096)
-  trimmed       —            (or: "2 KB chunks, 1 session turn")
-  [system]
-    ...
-  [user]
-    ...
-
-STEP 4b CACHE CHECK
-  task          Hash messages and check response cache
-  key           a3f7c2e1deadbeef
-  result        miss
-  elapsed       0ms
-
-STEP 5  INFERENCE LOOP
-  task          Send assembled messages to model sidecar for generation
-  mode          embed short-circuit: time_date
-  tool_call     get_time(null)
-  tool_result   2026-03-08 14:57:17 EDT (Sunday)
-  elapsed       2ms
-
-  # Model-driven path (reason=file path or forced):
-  # PASS 1        model-driven tool dispatch
-  # call          POST localhost:27001/v1/chat/completions
-  # raw_resp      "<tool:read_file>"
-  # tool_call     read_file({"path":"go.mod"})
-  # tool_result   module github.com/...
-  # latency 1     320ms
-  # elapsed       320ms
-
-  # If tool fails, pass 2 is called to explain the error:
-  # PASS 2        explain tool result
-  # call          POST localhost:27001/v1/chat/completions
-  # raw_resp      "The file could not be read because..."
-  # latency 2     1200ms
-
-STEP 5b CACHE WRITE
-  task          Store response in cache
-  key           a3f7c2e1deadbeef
-  ttl           60m
-  elapsed       0ms
-
-STEP 6  SESSION
-  task          Persist conversation to disk
-  id            abc123
-  saved         ~/.config/iq/sessions/abc123.yaml
-  turns         1
-  elapsed       0ms
-```
-
-Dry-run mode (`-n`) prints Steps 1–4 only, skipping inference.
-
 
 ## Source Files
-
-### Domain Packages
-
-| File | Purpose |
-|------|---------|
-| `internal/config/config.go` | Config struct, Load/Save/LoadAt/SaveAt/DirFor, model pool helpers, embed model, kb_min_score, context_window, legacy migrations |
-| `internal/search/search.go` | DuckDuckGo HTML search client, retry logic, result parsing |
-| `internal/sidecar/sidecar.go` | Sidecar state, lifecycle (start/stop), port allocation, pool dispatch, process helpers |
-| `internal/sidecar/transport.go` | OpenAI-compatible HTTP transport: ChatRequest, Call, Stream, RawCall, StripThinkBlocks |
-| `internal/sidecar/infer_server.py` | Custom MLX inference sidecar (embedded in binary) |
-| `internal/cue/cue.go` | Cue struct, Load/Save, Find, ForModel, embedded default YAML |
-| `internal/cue/cues_default.yaml` | 17 default cues across 8 categories (embedded in binary) |
-| `internal/embed/embed.go` | Embed sidecar lifecycle, HTTP embedding calls, cosine similarity, cue classifier |
-| `internal/embed/embed_server.py` | Python embedding sidecar (MLX-based, embedded in binary) |
-| `internal/cache/cache.go` | Response cache with FNV64a hashing, TTL expiry, check/write |
-| `internal/tools/tools.go` | Tool registry (8 tools), parser, executor, tool signals, embed-based detection |
-| `internal/tools/tools_test.go` | Tests for calcEval, extractCalcExpression, ParseCalls, ValidatePath, HasFilePath, routing, registry |
-| `internal/lm/lm.go` | HF API types/client, manifest CRUD, cache helpers, model param/quant parsing, formatting |
-| `internal/kb/kb.go` | KB index types, chunking strategies, hybrid search, ingest, persistence; PathFor/LoadFrom/SaveTo/IngestInto for path-parameterized access |
-
-### CLI Package
 
 | File | Purpose |
 |------|---------|
 | `cmd/iq/main.go` | CLI entry point, root command, version, help routing |
-| `cmd/iq/svc.go` | Status display, pool/embed/restart commands (`iq pool list/add/rm`, `iq start/stop/restart`), thin wrappers for sidecar package |
-| `cmd/iq/cue.go` | Cue CLI commands (list, show, add, edit, rm, assign, reset, sync) |
-| `cmd/iq/prompt.go` | 8-step execution pipeline, session management, REPL, trace output |
-| `cmd/iq/context.go` | Context budget trimming: token estimation, KB chunk drop, session turn drop |
-| `cmd/iq/prompt_test.go` | End-to-end orchestration tests with mock sidecar (httptest) |
-| `cmd/iq/tools.go` | Tool trace helpers (printToolCallTrace, printToolResultTrace, printToolStatus) |
-| `cmd/iq/kb.go` | KB CLI commands (ingest, list, search, rm, clear) |
-| `cmd/lm/lm.go` | Cobra commands for lm search/get/list/show/rm (thin shim over internal/lm) |
-| `cmd/lm/perf.go` | Benchmark corpus, bench/sweep/show/clear commands, metrics |
-| `cmd/iq/cfg.go` | `iq config` — show effective config, validate config files |
-| `cmd/iq/probe.go` | `iq pry` — raw sidecar access |
-| `cmd/lm/bench_corpus.yaml` | Benchmark test data (embedded in lm binary) |
-| `cmd/kb/main.go` | kb binary entry point; root command dispatches bare `kb <query>` to ask pipeline |
-| `cmd/kb/ask.go` | `kb ask` RAG pipeline: embed → KB search → assemble → stream; config helpers for ~/.config/kb/ |
-| `cmd/kb/kb.go` | KB management commands (ingest, list, search, rm, clear) against ~/.config/kb/kb.json |
-| `cmd/kb/svc.go` | `kb start/stop/restart/status` — sidecar lifecycle for the kb binary |
-| `cmd/kb/cfg.go` | `kb config` — show ~/.config/kb/config.yaml and index summary |
+| `cmd/iq/svc.go` | `start`, `stop`, `restart`, `status`, `doc`; model resolution and download |
+| `cmd/iq/pick.go` | `iq pick`: memory probe, catalog pick, config write |
+| `cmd/iq/pi.go` | `iq pi`: pi provider entry (print, or merge into `~/.pi/agent/models.json` with `-w`) |
+| `cmd/iq/cfg.go` | `iq config`: show and validate |
+| `internal/config/config.go` | Schema-3 config, load/save, version-2 migration |
+| `internal/model/model.go` | Catalog, fit rule, `Pick`, cache helpers, `hf download` |
+| `internal/model/catalog.yaml` | Curated model list (embedded) |
+| `internal/sidecar/sidecar.go` | Sidecar state, lifecycle via `mlx_lm.server` (`InferArgs`), port allocation, orphan cleanup, venv discovery, VLM guard |
+| `internal/usage/usage.go` | Shared help-page renderer |
+| `internal/color/color.go` | Terminal colour helpers |
 
+## History
 
+iq began in 2026 as a three-binary research vehicle: `iq` routed prompts through embedding-based cue classification, tool detection, knowledge-base retrieval, a response cache, and a hand-rolled tool-call loop against a custom Python inference server; `lm` downloaded, listed, and benchmarked models; `kb` kept a private knowledge base. The project froze on 2026-03-20.
 
-## Architecture Notes
-
-- **Local-first.** All inference and embedding runs on the same machine. IQ does not have a cloud-LLM fallback; offline behaviour is part of the contract.
-- **Sidecar boundary.** Inference and embedding live in detached Python subprocesses; Go code communicates over OpenAI-compatible HTTP on `localhost`. State is persisted under `~/.config/iq/run/`. This boundary keeps the model lifecycle independent of the CLI process.
-- **Two embeddings, one job.** `bge-small-en-v1.5-bf16` (384-dim) is reused for cue classification, tool detection, and KB retrieval. Reusing the input vector across these stages is intentional — it keeps Step 1's embedding the only embedding call per prompt for non-KB paths.
-- **Tool use is harness-driven.** The model emits structured tool requests; Go code (not the model) executes them and re-injects results. All tools are read-only; future write tools will require explicit `--confirm`.
-- **RAG is plain-text injection.** KB chunks are scored by hybrid cosine + keyword boost and inserted as user-message context. The model only ever sees text — embeddings never enter the model.
-- **Schema versioning.** `~/.config/iq/config.yaml` carries an integer `version:` field. Migrations chain forward; an unknown future version returns a hard error rather than dropping fields.
-- **Response cache is FNV64a-keyed** with 1h TTL, disabled in session mode and when tools are active. Cache key includes both the assembled message array and the model ID.
-- **Per-binary versioning.** Each of the three installable binaries (`iq`, `lm`, `kb`) carries its own `programVersion`. `./build.sh prep` treats `cmd/iq` as the primary binary (module basename match) and bumps only its `programVersion`; `cmd/kb` and `cmd/lm` are secondary and skipped with a note. Releases for `kb` and `lm` bump their own `programVersion` manually in their respective ACs.
-
-## Conventions
-
-- Update this document when architecture or major workflow changes materially.
-- Per-release version history lives in `CHANGELOG.md`; this document records durable structural decisions only.
-- Keep stable structure here; transient implementation detail in code.
+It reopened on 2026-10-06 after pi proved to be the harness iq had been reaching for. Pi owns the loop, tools, sessions, and extensions, and runs sub-1k-token system prompts that suit small local models. The `hf` CLI covers downloads and cache management, `mlx_lm.benchmark` covers benchmarks, and mlx-lm's own `mlx_lm.server` handles array content, tool schemas, and tool-call parsing that the custom server lacked. The multi-model pool was retired because one good model behind pi beats several small ones behind a router on current hardware. About 12,400 lines of Go became about 2,000.

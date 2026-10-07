@@ -1,23 +1,21 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
-	"strings"
 
 	"github.com/spf13/cobra"
+
 	"iq/internal/color"
 	"iq/internal/usage"
 )
 
 const (
 	programName    = "iq"
-	programVersion = "0.19.6"
+	programVersion = "0.20.0"
 	programURL     = "iq"
-	programSummary = "Work with IQ from the command line"
+	programSummary = "Run one local MLX model for pi"
 )
 
 // errSilent is returned when the error has already been printed.
@@ -51,80 +49,41 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// newStatusCmd returns a top-level `iq status` / `iq st` command.
-func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "status",
-		Aliases:      []string{"st"},
-		Short:        "Show running sidecars and memory use",
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return printStatus()
-		},
-	}
-}
-
 // newRootCmd wires every iq command under one root whose help pages share one renderer.
 func newRootCmd() *cobra.Command {
 	cobra.EnableCommandSorting = false
-	var rootOpts promptOpts
-
 	root := &cobra.Command{
 		Use:          programName,
 		SilenceUsage: true,
-		Args:         cobra.ArbitraryArgs,
+		Args:         cobra.NoArgs,
 		Annotations: map[string]string{
-			usage.SynopsisKey: "[options] MESSAGE",
+			usage.SynopsisKey: "COMMAND [options]",
 			usage.NoteKey: "Run 'iq COMMAND -h' for command-specific options.\n" +
-				"Model downloads and benchmarks live in the separate lm utility.",
+				"iq runs one MLX model as an mlx_lm.server sidecar and hands it to pi.",
 		},
-		Example: "$ iq \"explain transformers\"\n" +
-			"$ iq -d \"explain transformers\"\n" +
-			"$ iq ask\n" +
+		Example: "$ iq doc\n" +
+			"$ iq pick -w\n" +
 			"$ iq start\n" +
-			"$ iq st\n" +
-			"$ iq doc",
+			"$ iq pi -w\n" +
+			"$ pi --model iq/default_model\n" +
+			"$ iq stop",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return cmd.Help()
-			}
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-			defer cancel()
-			input := strings.Join(args, " ")
-			var sess *session
-			if rootOpts.sessionID != "" {
-				var err error
-				sess, err = loadSession(rootOpts.sessionID)
-				if err != nil {
-					return err
-				}
-			}
-			_, err := executePrompt(ctx, input, rootOpts, sess)
-			return err
+			return cmd.Help()
 		},
 	}
-
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SilenceErrors = true
-	addPromptFlags(root, &rootOpts)
-
 	root.AddCommand(
-		newPromptCmd(),
+		newDocCmd(),
+		newPickCmd(),
 		newStartCmd(),
 		newStopCmd(),
 		newRestartCmd(),
 		newStatusCmd(),
-		newDocCmd(),
-		newPoolCmd(),
-		newEmbedCmd(),
-		newCueCmd(),
-		newKbCmd(),
+		newPiCmd(),
 		newConfigCmd(),
-		newProbeCmd(),
 		newVersionCmd(),
-		newSvcCmd(), // hidden backward-compat alias
 	)
-
 	usage.Install(root, usage.Header{
 		Name:        programName,
 		Version:     programVersion,
@@ -146,11 +105,6 @@ func runCLI() {
 		}
 		os.Exit(1)
 	}
-}
-
-// shellescape single-quotes a string for safe shell interpolation.
-func shellescape(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func main() {

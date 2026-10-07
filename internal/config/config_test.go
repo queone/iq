@@ -7,478 +7,108 @@ import (
 	"testing"
 )
 
-// ── Migration tests ───────────────────────────────────────────────────────────
-
-func TestMigrateFlatTiers(t *testing.T) {
-	tests := []struct {
-		name    string
-		yaml    string
-		wantIDs []string // expected model IDs in order (fast first, slow second)
-	}{
-		{
-			"flat list fast and slow",
-			"tiers:\n  fast:\n    - model-a\n  slow:\n    - model-b\n",
-			[]string{"model-a", "model-b"},
-		},
-		{
-			"flat list fast only",
-			"tiers:\n  fast:\n    - model-a\n",
-			[]string{"model-a"},
-		},
-		{
-			"flat list slow only",
-			"tiers:\n  slow:\n    - model-b\n",
-			[]string{"model-b"},
-		},
-		{
-			"flat list multiple models",
-			"tiers:\n  fast:\n    - model-a\n    - model-c\n  slow:\n    - model-b\n",
-			[]string{"model-a", "model-c", "model-b"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := migrateFlatTiers([]byte(tc.yaml), nil)
-			if cfg == nil {
-				t.Fatal("migrateFlatTiers returned nil")
-			}
-			got := cfg.AllModels()
-			if !stringSliceEqual(got, tc.wantIDs) {
-				t.Errorf("models = %v, want %v", got, tc.wantIDs)
-			}
-		})
-	}
-}
-
-func TestMigrateOldFourTier(t *testing.T) {
-	tests := []struct {
-		name     string
-		old      map[string]string
-		diskSize map[string]int64
-		wantIDs  []string // expected model IDs in order
-	}{
-		{
-			"quality maps to slow by disk (≥2GB)",
-			map[string]string{"quality": "large-model"},
-			map[string]int64{"large-model": 3 * 1024 * 1024 * 1024},
-			[]string{"large-model"},
-		},
-		{
-			"tiny maps to fast by disk (<2GB)",
-			map[string]string{"tiny": "small-model"},
-			map[string]int64{"small-model": 500 * 1024 * 1024},
-			[]string{"small-model"},
-		},
-		{
-			"no disk info falls back to tier mapping",
-			map[string]string{"tiny": "small-model", "quality": "large-model"},
-			nil,
-			[]string{"small-model", "large-model"}, // fast first, slow second
-		},
-		{
-			"duplicate models deduplicated",
-			map[string]string{"tiny": "same-model", "fast": "same-model"},
-			nil,
-			[]string{"same-model"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			diskFn := func(id string) int64 {
-				if tc.diskSize == nil {
-					return 0
-				}
-				return tc.diskSize[id]
-			}
-			cfg := migrateOldFourTier(tc.old, diskFn)
-			if cfg == nil {
-				t.Fatal("migrateOldFourTier returned nil")
-			}
-			got := cfg.AllModels()
-			if !stringSliceEqual(got, tc.wantIDs) {
-				t.Errorf("models = %v, want %v", got, tc.wantIDs)
-			}
-		})
-	}
-}
-
-func TestLegacyEmbedModelMigration(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
+func writeConfig(t *testing.T, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// v0 structured tiers with cue_model set, embed_model absent.
-	yaml := "tiers:\n  fast:\n    models: []\n  slow:\n    models: []\ncue_model: embed-via-cue\n"
-	if err := os.WriteFile(cfgDir+"/config.yaml", []byte(yaml), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-
-	cfg, err := Load(nil)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	if cfg.EmbedModel != "embed-via-cue" {
-		t.Errorf("EmbedModel = %q, want %q", cfg.EmbedModel, "embed-via-cue")
-	}
-	if cfg.CueModel != "" {
-		t.Errorf("CueModel should be cleared after migration, got %q", cfg.CueModel)
-	}
+	return path
 }
 
-// stringSliceEqual compares two string slices treating nil and empty as equal.
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func TestResolveInferParams(t *testing.T) {
-	t.Run("defaults only", func(t *testing.T) {
-		cfg := &Config{}
-		p := ResolveInferParams(cfg, "")
-		if p.Temperature != DefaultTemperature {
-			t.Errorf("Temperature: got %v, want %v", p.Temperature, DefaultTemperature)
-		}
-		if p.TopP != nil || p.MinP != nil || p.TopK != nil || p.Stop != nil || p.Seed != nil {
-			t.Error("extended params should all be nil when not configured")
-		}
-	})
-
-	t.Run("global extended params applied", func(t *testing.T) {
-		cfg := &Config{
-			TopP: new(0.9),
-			MinP: new(0.05),
-			TopK: new(40),
-			Stop: []string{"</s>", "\n\n"},
-			Seed: new(42),
-		}
-		p := ResolveInferParams(cfg, "")
-		if p.TopP == nil || *p.TopP != 0.9 {
-			t.Errorf("TopP: got %v, want 0.9", p.TopP)
-		}
-		if p.MinP == nil || *p.MinP != 0.05 {
-			t.Errorf("MinP: got %v, want 0.05", p.MinP)
-		}
-		if p.TopK == nil || *p.TopK != 40 {
-			t.Errorf("TopK: got %v, want 40", p.TopK)
-		}
-		if len(p.Stop) != 2 || p.Stop[0] != "</s>" {
-			t.Errorf("Stop: got %v", p.Stop)
-		}
-		if p.Seed == nil || *p.Seed != 42 {
-			t.Errorf("Seed: got %v, want 42", p.Seed)
-		}
-	})
-
-	t.Run("model overrides global", func(t *testing.T) {
-		cfg := &Config{
-			Models: []ModelEntry{
-				{
-					ID:   "some-model",
-					TopP: new(0.8),
-					Seed: new(99),
-				},
-			},
-			TopP: new(0.95),
-			Seed: new(1),
-		}
-		p := ResolveInferParams(cfg, "some-model")
-		if p.TopP == nil || *p.TopP != 0.8 {
-			t.Errorf("TopP model override: got %v, want 0.8", p.TopP)
-		}
-		if p.Seed == nil || *p.Seed != 99 {
-			t.Errorf("Seed model override: got %v, want 99", p.Seed)
-		}
-	})
-
-	t.Run("unknown model uses global only", func(t *testing.T) {
-		cfg := &Config{
-			TopP: new(0.95),
-		}
-		p := ResolveInferParams(cfg, "not-in-pool")
-		if p.TopP == nil || *p.TopP != 0.95 {
-			t.Errorf("TopP: got %v, want 0.95 (global)", p.TopP)
-		}
-	})
-
-	t.Run("model stop overrides global stop", func(t *testing.T) {
-		cfg := &Config{
-			Models: []ModelEntry{
-				{
-					ID:   "some-model",
-					Stop: []string{"STOP"},
-				},
-			},
-			Stop: []string{"</s>"},
-		}
-		p := ResolveInferParams(cfg, "some-model")
-		if len(p.Stop) != 1 || p.Stop[0] != "STOP" {
-			t.Errorf("Stop model override: got %v", p.Stop)
-		}
-	})
-}
-
-func TestLoadInvalidYAML(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	// A leading tab is illegal in YAML and guaranteed to fail go-yaml.
-	if err := os.WriteFile(cfgDir+"/config.yaml", []byte("\t: invalid"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	_, err := Load(nil)
-	if err == nil {
-		t.Fatal("Load with invalid YAML should return an error, got nil")
-	}
-}
-
-func TestLoadSchemaV1MigratesToV2(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	y := "version: 1\ntiers:\n  fast:\n    models:\n      - model-a\n  slow:\n    models: []\n"
-	cfgPath := cfgDir + "/config.yaml"
-	if err := os.WriteFile(cfgPath, []byte(y), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-
-	cfg, err := Load(nil)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	if cfg.Version != ConfigVersion {
-		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
-	}
-	models := cfg.AllModels()
-	if len(models) != 1 || models[0] != "model-a" {
-		t.Errorf("AllModels = %v, want [model-a]", models)
-	}
-	// Confirm saved file is now v2.
-	saved, err := os.ReadFile(cfgPath)
+func TestLoadMissingFileReturnsDefaultsWithoutWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := LoadAt(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(saved), "version: 2") {
-		t.Errorf("saved config.yaml missing 'version: 2':\n%s", saved)
+	if cfg.Version != ConfigVersion || cfg.Model != "" {
+		t.Errorf("defaults = %+v", cfg)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("Load must not create the file")
 	}
 }
 
-func TestLoadSchemaV1WithPerTierParams(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	// v1 with per-tier temperature override on slow tier.
-	y := "version: 1\ntiers:\n  fast:\n    models:\n      - fast-model\n  slow:\n    models:\n      - slow-model\n    temperature: 0.5\n"
-	if err := os.WriteFile(cfgDir+"/config.yaml", []byte(y), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
+const v2Config = `version: 2
+repetition_penalty: 1.3
+max_tokens: 8192
+models:
+    - id: mlx-community/Qwen3.5-4B-OptiQ-4bit
+      context_window: 32768
+      max_tokens: 4096
+      temperature: 0.3
+      chat_template_args: {enable_thinking: false}
+    - id: mlx-community/Llama-3.2-3B-Instruct-4bit
+embed_model: mlx-community/bge-small-en-v1.5-bf16
+kb_min_score: 0.72
+tool_paths: [/tmp]
+`
 
-	cfg, err := Load(nil)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	if cfg.Version != ConfigVersion {
-		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
-	}
-	// fast-model should have no per-model override.
-	p := ResolveInferParams(cfg, "fast-model")
-	if p.Temperature != DefaultTemperature {
-		t.Errorf("fast-model temperature = %v, want default %v", p.Temperature, DefaultTemperature)
-	}
-	// slow-model should inherit the old slow-tier temperature override.
-	p2 := ResolveInferParams(cfg, "slow-model")
-	if p2.Temperature != 0.5 {
-		t.Errorf("slow-model temperature = %v, want 0.5 (migrated from tier override)", p2.Temperature)
-	}
-}
-
-func TestLoadSchemaV0StampsV2(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	// Structured format with no version field (v0).
-	y := "tiers:\n  fast:\n    models:\n      - model-a\n  slow:\n    models: []\n"
-	cfgPath := cfgDir + "/config.yaml"
-	if err := os.WriteFile(cfgPath, []byte(y), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-
-	cfg, err := Load(nil)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	if cfg.Version != ConfigVersion {
-		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
-	}
-	updated, err := os.ReadFile(cfgPath)
+func TestV2MigratesToV3InMemory(t *testing.T) {
+	path := writeConfig(t, v2Config)
+	cfg, err := LoadAt(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(updated), "version: 2") {
-		t.Errorf("saved config.yaml missing 'version: 2':\n%s", updated)
+	if cfg.Model != "mlx-community/Qwen3.5-4B-OptiQ-4bit" || cfg.ContextWindow != 32768 || cfg.MaxTokens != 4096 {
+		t.Errorf("migrated = %+v", cfg)
 	}
-}
-
-func TestLoadSchemaV2Direct(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
+	if got := cfg.ChatTemplateArgsJSON(cfg.Model); got != `{"enable_thinking":false}` {
+		t.Errorf("ChatTemplateArgsJSON = %q", got)
 	}
-	y := "version: 2\nmodels:\n  - id: model-a\n  - id: model-b\n    temperature: 0.5\n"
-	if err := os.WriteFile(cfgDir+"/config.yaml", []byte(y), 0644); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"kept model mlx-community/Qwen3.5-4B-OptiQ-4bit", "dropped 1 additional pool model", "embed_model", "kb_min_score", "tool_paths", "repetition_penalty", "models[0].temperature"} {
+		if !strings.Contains(cfg.MigrationNotice, want) {
+			t.Errorf("notice lacks %q: %s", want, cfg.MigrationNotice)
+		}
 	}
-	t.Setenv("HOME", home)
-
-	cfg, err := Load(nil)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
+	data, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(data), "version: 2") {
+		t.Errorf("Load must not rewrite the file")
 	}
-	if cfg.Version != 2 {
-		t.Errorf("Version = %d, want 2", cfg.Version)
-	}
-	models := cfg.AllModels()
-	if len(models) != 2 || models[0] != "model-a" || models[1] != "model-b" {
-		t.Errorf("AllModels = %v, want [model-a model-b]", models)
-	}
-	// model-b should have per-model temperature override.
-	p := ResolveInferParams(cfg, "model-b")
-	if p.Temperature != 0.5 {
-		t.Errorf("model-b temperature = %v, want 0.5", p.Temperature)
-	}
-}
-
-func TestLoadFutureSchemaVersionErrors(t *testing.T) {
-	home := t.TempDir()
-	cfgDir := home + "/.config/iq"
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgDir+"/config.yaml", []byte("version: 99\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-
-	_, err := Load(nil)
-	if err == nil {
-		t.Fatal("Load with future schema version should return an error")
-	}
-}
-
-func TestHasModel(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelEntry{
-			{ID: "org/model-a"},
-			{ID: "org/model-b"},
-		},
-	}
-	if !cfg.HasModel("org/model-a") {
-		t.Error("HasModel(model-a) should be true")
-	}
-	if cfg.HasModel("org/model-c") {
-		t.Error("HasModel(model-c) should be false")
-	}
-}
-
-func TestAllModels(t *testing.T) {
-	cfg := &Config{
-		Models: []ModelEntry{
-			{ID: "first"},
-			{ID: "second"},
-		},
-	}
-	got := cfg.AllModels()
-	want := []string{"first", "second"}
-	if !stringSliceEqual(got, want) {
-		t.Errorf("AllModels = %v, want %v", got, want)
-	}
-
-	// Empty pool.
-	empty := &Config{}
-	if ids := empty.AllModels(); len(ids) != 0 {
-		t.Errorf("empty AllModels = %v, want []", ids)
-	}
-}
-
-// ── DirFor / LoadAt / SaveAt tests ───────────────────────────────────────────
-
-func TestDirFor(t *testing.T) {
-	dir, err := DirFor("iq-test-dirfor")
-	if err != nil {
-		t.Fatalf("DirFor: %v", err)
-	}
-	if !strings.Contains(dir, "iq-test-dirfor") {
-		t.Errorf("DirFor returned %q, want path containing %q", dir, "iq-test-dirfor")
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Errorf("DirFor did not create directory: %v", err)
-	}
-	// Cleanup.
-	os.RemoveAll(dir)
-}
-
-func TestLoadAtSaveAt_roundtrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	cfg := defaultConfig()
-	cfg.EmbedModel = "test-model"
-	mt := 1234
-	cfg.MaxTokens = &mt
-
 	if err := SaveAt(path, cfg); err != nil {
-		t.Fatalf("SaveAt: %v", err)
+		t.Fatal(err)
 	}
-
-	loaded, err := LoadAt(path, nil)
-	if err != nil {
-		t.Fatalf("LoadAt: %v", err)
-	}
-	if loaded.EmbedModel != "test-model" {
-		t.Errorf("EmbedModel = %q, want %q", loaded.EmbedModel, "test-model")
-	}
-	if loaded.MaxTokens == nil || *loaded.MaxTokens != 1234 {
-		t.Errorf("MaxTokens = %v, want 1234", loaded.MaxTokens)
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), "version: 3") || strings.Contains(string(data), "embed_model") || strings.Contains(string(data), "MigrationNotice") {
+		t.Errorf("saved file:\n%s", data)
 	}
 }
 
-func TestLoadAt_notExist_returnsDefaults(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "noexist.yaml")
+func TestV3RoundTripKeepsTemplateArgs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &Config{Model: "org/model", ContextWindow: 32768, ChatTemplateArgs: map[string]any{"zeta": 1, "enable_thinking": false}}
+	if err := SaveAt(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 2; round++ {
+		loaded, err := LoadAt(path)
+		if err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if loaded.Version != 3 || loaded.Model != "org/model" || loaded.MigrationNotice != "" {
+			t.Errorf("round %d: %+v", round, loaded)
+		}
+		if got := loaded.ChatTemplateArgsJSON("org/model"); got != `{"enable_thinking":false,"zeta":1}` {
+			t.Errorf("round %d: JSON = %q", round, got)
+		}
+		if got := loaded.ChatTemplateArgsJSON("org/other"); got != "" {
+			t.Errorf("round %d: other model should get no args, got %q", round, got)
+		}
+		if err := SaveAt(path, loaded); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
-	cfg, err := LoadAt(path, nil)
-	if err != nil {
-		t.Fatalf("LoadAt on missing file: %v", err)
+func TestFutureAndAncientVersionsError(t *testing.T) {
+	if _, err := LoadAt(writeConfig(t, "version: 4\nmodel: x\n")); err == nil || !strings.Contains(err.Error(), "upgrade iq") {
+		t.Errorf("v4: err = %v", err)
 	}
-	// Should return defaults and create the file.
-	if cfg == nil {
-		t.Fatal("LoadAt returned nil config")
+	if _, err := LoadAt(writeConfig(t, "version: 1\ntiers: {}\n")); err == nil || !strings.Contains(err.Error(), "iq pick -w") {
+		t.Errorf("v1: err = %v", err)
 	}
-	if cfg.Version != ConfigVersion {
-		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("LoadAt did not create missing config file: %v", err)
+	if _, err := LoadAt(writeConfig(t, "model: [unclosed\n")); err == nil {
+		t.Error("invalid YAML should error")
 	}
 }

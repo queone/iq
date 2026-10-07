@@ -26,21 +26,21 @@ func TestHelpFlagsPrintIdenticalPages(t *testing.T) {
 }
 
 func TestHelpCommandRoutesToSubcommand(t *testing.T) {
-	want, _ := usagetest.RunCLI(t, programName, runCLI, "cue", "list", "-h")
-	for _, args := range [][]string{{"help", "cue", "list"}, {"-h", "cue", "list"}, {"cue", "list", "-?"}} {
+	want, _ := usagetest.RunCLI(t, programName, runCLI, "config", "show", "-h")
+	for _, args := range [][]string{{"help", "config", "show"}, {"-h", "config", "show"}, {"config", "show", "-?"}} {
 		got, stderr := usagetest.RunCLI(t, programName, runCLI, args...)
 		if got != want || stderr != "" {
-			t.Errorf("%q differs from 'cue list -h' (stderr=%q):\n%s", args, stderr, got)
+			t.Errorf("%q differs from 'config show -h' (stderr=%q):\n%s", args, stderr, got)
 		}
 	}
-	if !strings.Contains(want, "\nUsage\n  iq cue list [options]\n") {
-		t.Errorf("cue list help lacks its synopsis:\n%s", want)
+	if !strings.Contains(want, "\nUsage\n  iq config show [options]\n") {
+		t.Errorf("config show help lacks its synopsis:\n%s", want)
 	}
 }
 
 func TestVersionFlagWorksOnEveryCommand(t *testing.T) {
 	want := programName + " v" + programVersion + "\n"
-	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}, {"ver"}, {"doc", "-v"}, {"cue", "list", "--version"}} {
+	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}, {"ver"}, {"doc", "-v"}, {"config", "show", "--version"}} {
 		got, stderr := usagetest.RunCLI(t, programName, runCLI, args...)
 		if got != want || stderr != "" {
 			t.Errorf("%q: stdout=%q stderr=%q, want %q", args, got, stderr, want)

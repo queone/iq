@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -88,5 +89,23 @@ func TestNextAvailablePortMixedStates(t *testing.T) {
 	// PortBase is blocked (live). PortBase+1 is free (dead PID).
 	if port != PortBase+1 {
 		t.Errorf("got port %d, want %d", port, PortBase+1)
+	}
+}
+
+// ── InferArgs ─────────────────────────────────────────────────────────────────
+
+func TestInferArgsWithoutTemplateArgs(t *testing.T) {
+	got := InferArgs("/models/snap", 27001, "")
+	want := []string{"-m", "mlx_lm", "server", "--model", "/models/snap", "--port", "27001", "--host", "127.0.0.1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("InferArgs = %q, want %q", got, want)
+	}
+}
+
+func TestInferArgsWithTemplateArgs(t *testing.T) {
+	got := InferArgs("/models/snap", 27002, `{"enable_thinking":false}`)
+	want := []string{"-m", "mlx_lm", "server", "--model", "/models/snap", "--port", "27002", "--host", "127.0.0.1", "--chat-template-args", `{"enable_thinking":false}`}
+	if !slices.Equal(got, want) {
+		t.Fatalf("InferArgs = %q, want %q", got, want)
 	}
 }

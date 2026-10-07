@@ -1,25 +1,23 @@
 # iq
 
-> **Project status: frozen (2026-03-20).**
-> Development halted. `iq` and `lm` are kept as learning artifacts — a hands-on study in LLM orchestration, embedding pipelines, and local inference on Apple Silicon. For active development we have moved to [OpenCode](https://github.com/anomalyco/opencode/) with externally-hosted LLMs. The `kb` binary has been superseded by more capable open source alternatives ([AnythingLLM](https://github.com/Mintplex-Labs/anything-llm), [PrivateGPT](https://github.com/zylon-ai/private-gpt), [Khoj](https://github.com/khoj-ai/khoj), [Open WebUI](https://github.com/open-webui/open-webui)). See [arch.md](arch.md) for the full technical record.
+> **Project status: reopened (2026-10-06) as the local-model substrate for pi.**
+> iq was frozen on 2026-03-20 as a learning artifact in LLM orchestration, embedding pipelines, and local inference on Apple Silicon. It was reopened with one purpose: run a local MLX model that [pi](https://pi.dev/) can use. Day-to-day AI-assisted development uses [Claude Code](https://claude.com/claude-code) with hosted models. The former `lm` and `kb` binaries, the prompt pipeline, and the knowledge base were removed; see [arch.md](arch.md) for what they did and why they went.
 
-iq is a command-line tool for managing **offline generative AI systems** on Apple Silicon. It handles local LLM downloads, runs inference sidecars via `mlx_lm`, and routes prompts through a classification layer that selects the right model and cue for each task. The underlying AI models run entirely **on-device**, while iq provides the CLI interface, workflow management, and task orchestration — all with no cloud dependency and no data leaving your machine.
+iq is a small command-line controller for **one offline MLX model on Apple Silicon**. It picks the largest verified model that fits the machine's memory, downloads it from Hugging Face when needed, runs it as a managed `mlx_lm.server` sidecar, and hands the endpoint to pi. The model runs entirely **on-device**; pi provides the coding-agent harness, tools, sessions, and extensions.
 
 ## Why
 
-A personal tool for experimenting with LLM orchestration directly from the Mac terminal. The idea is to run multiple small models locally, route tasks to the right one automatically, and stay close enough to the machinery to understand what's actually happening at each step. It's a research vehicle as much as a utility — focus on a practical, inspectable inference router, with a longer-term interest in lightweight agentic behaviour: chaining models, tool use, and multi-step reasoning where the user stays in control of every layer.
-
-For a detailed technical overview, see [arch.md](arch.md). For governance, see [AGENTS.md](AGENTS.md) and [docs/](docs/).
+Pi is the harness. What it cannot do is decide which model a given Mac can hold, download it, and keep an OpenAI-compatible server running for it. iq does exactly that and nothing else.
 
 ## Requirements
 
 - Apple Silicon Mac (M1 or later)
 - Go (for building)
-- Python 3 with `mlx-lm` installed (`pipx install mlx-lm`)
-- `hf` CLI (`pipx install huggingface_hub`)
-- `mlx-embedding-models` in the mlx-lm venv (`pipx inject mlx-lm mlx-embedding-models`) — used for embeddings (classification + RAG)
+- Python 3 with `mlx-lm` 0.30.7 or newer (`pipx install mlx-lm`); its `mlx_lm.server` runs the sidecar
+- `hf` CLI (`pipx install huggingface_hub`) for model downloads
+- [pi](https://pi.dev/) to use the model
 
-iq uses [Hugging Face](https://huggingface.co) as the official model registry. All model downloads (`lm get`, `lm search`) pull from HF. For access to gated models and to avoid rate limits, set a Hugging Face token:
+For gated models and to avoid rate limits, set a Hugging Face token:
 
 ```bash
 export HF_TOKEN=hf_...   # replace with your token
@@ -35,34 +33,61 @@ cd iq
 ./build.sh
 ```
 
-Builds three binaries into `$GOPATH/bin`: `iq`, `lm`, `kb`.
+Builds and installs one binary, `iq`, into `$GOPATH/bin`.
 
 ## Quick Start
 
 ```bash
-# Download models
-lm get mlx-community/bge-small-en-v1.5-bf16
-lm get mlx-community/Llama-3.2-3B-Instruct-4bit
-lm get mlx-community/Qwen2.5-7B-Instruct-4bit
-
-# Configure
-iq embed set mlx-community/bge-small-en-v1.5-bf16
-iq pool add mlx-community/Llama-3.2-3B-Instruct-4bit
-iq pool add mlx-community/Qwen2.5-7B-Instruct-4bit
-
-# Start sidecars
-iq start
-
-# Run a prompt
-iq "explain how transformers work"
+iq doc                           # check python3, mlx_lm.server and its flags, hf, and the model
+iq pick -w                       # choose the largest verified catalog model that fits this machine
+iq start                         # download if needed, then run it as an mlx_lm.server sidecar
+iq pi -w                         # write the `iq` provider into ~/.pi/agent/models.json
+pi --model iq/default_model      # use it from pi
+iq stop                          # stop the sidecar
 ```
+
+`iq start` with no configured model runs the pick for you and saves it. `iq start <model>` runs a specific Hugging Face model id instead.
+
+## Configuration
+
+`~/.config/iq/config.yaml` holds one model and the limits pi should know about:
+
+```yaml
+version: 3
+model: mlx-community/Qwen3.5-4B-OptiQ-4bit
+context_window: 32768
+max_tokens: 4096
+chat_template_args: {enable_thinking: false}
+```
+
+`chat_template_args` is passed verbatim as JSON to `mlx_lm.server --chat-template-args`. Qwen3.5 needs `enable_thinking: false` for plain tool use. A version-2 file from an earlier release is migrated in memory on load; the first `iq start` or `iq pick -w` saves it as version 3 and the migration notice lists every dropped key.
 
 ## Commands
 
 ```
-iq      — prompt pipeline, cue classification, session management
-lm      — model downloads, benchmarks (lm get/search/list/show/rm, lm perf)
-kb      — private knowledge base (kb ingest/list/search/ask)
+iq doc        — check runtime dependencies and model readiness
+iq pick       — pick the catalog model that fits this machine (-w writes it to config.yaml)
+iq start      — start the model's mlx_lm.server sidecar, downloading the model when needed
+iq stop       — stop the sidecar and sweep orphaned servers
+iq restart    — stop then start
+iq status     — show running sidecars and memory use
+iq pi         — print pi's provider entry for the running sidecar (-w writes ~/.pi/agent/models.json)
+iq config     — show or validate config.yaml
 ```
 
-Run any binary without arguments for full usage.
+Run `iq` without arguments for full usage.
+
+## Upgrading from the three-binary release
+
+The `lm` and `kb` binaries are gone, and the inference sidecar is now mlx-lm's own server. Optional cleanup:
+
+```bash
+rm -f "$(go env GOPATH)/bin/lm" "$(go env GOPATH)/bin/kb"
+rm -rf ~/.config/kb
+rm -f ~/.config/iq/infer_server.py ~/.config/iq/embed_server.py ~/.config/iq/cues.yaml \
+      ~/.config/iq/kb.json ~/.config/iq/response_cache.json ~/.config/iq/cue_embeddings.json \
+      ~/.config/iq/tool_embeddings.json ~/.config/iq/models.json ~/.config/iq/benchmarks.json
+rm -rf ~/.config/iq/sessions
+```
+
+Model downloads, cache listing, and benchmarks now come from `hf download`, `hf cache ls`, `mlx_lm.manage`, and `mlx_lm.benchmark`.
